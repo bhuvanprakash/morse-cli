@@ -1,0 +1,38 @@
+name: Release Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Helm revision (optional). If blank, previous revision is used."
+        required: false
+        type: string
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${KUBECONFIG_B64}" | base64 -d > "$HOME/.kube/config"
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PROD_B64 }}
+
+      - name: Rollback release
+        run: |
+          chmod +x ./deploy/releases/rollback.sh
+          if [ -n "${{ github.event.inputs.revision }}" ]; then
+            RELEASE_NAME=indusbase NAMESPACE=indusbase ./deploy/releases/rollback.sh "${{ github.event.inputs.revision }}"
+          else
+            RELEASE_NAME=indusbase NAMESPACE=indusbase ./deploy/releases/rollback.sh
+          fi

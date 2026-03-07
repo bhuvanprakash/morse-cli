@@ -1,0 +1,21 @@
+{{- if .Values.services.gate.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "indusbase.fullname" . }}-gate
+  namespace: {{ .Release.Namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "indusbase.fullname" . }}-gate
+  minReplicas: {{ .Values.services.gate.hpa.minReplicas }}
+  maxReplicas: {{ .Values.services.gate.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.services.gate.hpa.targetCPUUtilizationPercentage }}
+{{- end }}

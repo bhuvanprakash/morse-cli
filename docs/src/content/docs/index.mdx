@@ -1,0 +1,72 @@
+---
+title: IndusBase Documentation
+description: India's open-source, Postgres-native Backend-as-a-Service. The Supabase alternative built for Indian developers.
+template: splash
+hero:
+  tagline: The open-source BaaS built for India — Postgres-native, DPDP-compliant, WhatsApp-ready.
+  actions:
+    - text: Get Started in 5 Minutes
+      link: /self-hosting/docker-compose
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/indusbase/indusbase
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is IndusBase?
+
+IndusBase is a self-hosted, open-source Backend-as-a-Service built specifically for the Indian market.
+It gives your app a Postgres database, authentication, realtime subscriptions, file storage, edge
+functions, AI vector search, job queues, and push notifications — all behind a single API gateway.
+
+<CardGrid>
+  <Card title="🇮🇳 Built for India" icon="star">
+    WhatsApp OTP, Aadhaar eKYC, DPDP 2023 compliance, IST-timezone cron,
+    2Factor.in SMS, and UPI webhook presets out of the box.
+  </Card>
+  <Card title="⚡ Blazing Fast" icon="rocket">
+    API gateway written in Zig. Query engine in Rust. Sub-millisecond routing,
+    zero garbage collection on the hot path.
+  </Card>
+  <Card title="🤖 AI-Native" icon="puzzle">
+    Built-in pgvector search with Cohere multilingual embeddings — supports
+    Hindi, Tamil, Telugu, Bengali, and all Indic languages.
+  </Card>
+  <Card title="🔓 Truly Open Source" icon="open-book">
+    MIT licensed. No vendor lock-in. Self-host on any cloud or on-premise.
+    Your data never leaves your servers.
+  </Card>
+</CardGrid>
+
+## Architecture at a Glance
+
+| Service | Language | Port | Purpose |
+|---------|----------|------|---------|
+| indus-gate | Zig 0.14 | 8000 | API Gateway |
+| indus-auth | Go 1.23 | 8001 | Auth + WhatsApp OTP + Aadhaar |
+| indus-query | Rust 2021 | 8002 | Auto REST + GraphQL from PostgreSQL |
+| indus-live | Gleam 1.10 | 8004 | Realtime WebSocket |
+| indus-store | Go 1.23 | 8005 | S3-compatible object storage |
+| indus-edge | Zig 0.14 | 8006 | Edge functions (Bun workers) |
+| indus-ai | Rust 2021 | 8007 | Vector search + embeddings |
+| indus-queue | Go 1.23 | 8008 | Job queue + webhooks + cron |
+| indus-notify | Go 1.23 | 8009 | Push + SMS + Email notifications |
+| indus-config | Go 1.23 | 8010 | Feature flags + remote config |
+
+## Quick Start
+
+```bash
+git clone https://github.com/indusbase/indusbase
+cd indusbase
+cp .env.example .env
+openssl genrsa -out jwt-private.pem 2048
+openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
+docker-compose up -d --build
+sleep 30 && curl http://localhost:8000/health | jq
+```
+
+Your IndusBase is now running at [**http://localhost:8000**](http://localhost:8000).
+Open the dashboard at [**http://localhost:3000**](http://localhost:3000).

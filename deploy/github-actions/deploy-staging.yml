@@ -1,0 +1,29 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+      - run: |
+          helm upgrade --install indusbase ./deploy/helm/indusbase \
+            --namespace indusbase-staging \
+            --create-namespace \
+            --values ./deploy/helm/indusbase/values.yaml \
+            --values ./deploy/helm/indusbase/values.dev.yaml \
+            --set global.image.tag=sha-${{ github.sha }} \
+            --wait \
+            --timeout 10m

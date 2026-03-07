@@ -1,0 +1,21 @@
+flowchart LR
+    subgraph "Ingestion"
+        D[Documents] --> T[Text<br/>Chunking]
+        T --> E[Embedding<br/>Model]
+        E --> V[Vector<br/>Embeddings]
+        V --> S[Store in<br/>pgvector]
+    end
+    
+    subgraph "Query"
+        Q[User Query] --> QM[Embedding<br/>Model]
+        QM --> QV[Query<br/>Vector]
+        QV --> S
+        S --> K[Top-K<br/>Similarity]
+        K --> C[Context<br/>Results]
+        C --> L[LLM<br/>Prompt]
+        L --> R[Final<br/>Response]
+    end
+    
+    style D fill:#f9f,color:#000
+    style Q fill:#f9f,color:#000
+    style S fill:#dfd,color:#000

@@ -1,0 +1,21 @@
+graph LR
+    Client --> Gateway
+    Gateway --> Auth
+    Gateway --> Query
+    Gateway --> Meta
+    Gateway --> Live
+    Gateway --> Store
+    Gateway --> Edge
+    Gateway --> AI
+    Gateway --> Queue
+    
+    Auth --> Pool
+    Query --> Pool
+    Meta --> Pool
+    Live --> Pool
+    Store --> Pool
+    AI --> Pool
+    Queue --> Pool
+    
+    Pool --> Database
+    Live --> Redis

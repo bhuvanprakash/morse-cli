@@ -1,0 +1,21 @@
+{{- if .Values.services.live.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "indusbase.fullname" . }}-live
+  namespace: {{ .Release.Namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "indusbase.fullname" . }}-live
+  minReplicas: {{ .Values.services.live.hpa.minReplicas }}
+  maxReplicas: {{ .Values.services.live.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ default 70 .Values.services.live.hpa.targetCPUUtilizationPercentage }}
+{{- end }}

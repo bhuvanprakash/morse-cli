@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: indusbase-db-backup
+  namespace: indusbase
+spec:
+  schedule: "0 2 * * *"
+  timeZone: "Asia/Kolkata"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: indusbase-backup-sa
+          containers:
+            - name: pg-backup
+              image: postgres:16-alpine
+              command: ["/scripts/pg_backup.sh"]
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: indusbase-secrets
+                      key: POSTGRES_PASSWORD
+                - name: BACKUP_BUCKET
+                  value: indusbase-backups-prod
+                - name: AWS_DEFAULT_REGION
+                  value: ap-south-1
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
+                defaultMode: 0755

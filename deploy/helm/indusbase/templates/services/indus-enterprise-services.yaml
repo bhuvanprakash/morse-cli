@@ -1,0 +1,227 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-audit
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.audit.replicas }}
+  selector:
+    matchLabels:
+      app: indus-audit
+  template:
+    metadata:
+      labels:
+        app: indus-audit
+    spec:
+      containers:
+        - name: indus-audit
+          image: "{{ .Values.global.image.registry }}/indus-audit:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8011
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8011"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+          resources:
+            {{- toYaml .Values.services.audit.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-audit
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-audit
+  ports:
+    - name: http
+      port: 8011
+      targetPort: 8011
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-billing
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-billing
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.billing.replicas }}
+  selector:
+    matchLabels:
+      app: indus-billing
+  template:
+    metadata:
+      labels:
+        app: indus-billing
+    spec:
+      containers:
+        - name: indus-billing
+          image: "{{ .Values.global.image.registry }}/indus-billing:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8012
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8012"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: STRIPE_WEBHOOK_SECRET
+                  optional: true
+          resources:
+            {{- toYaml .Values.services.billing.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-billing
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-billing
+  ports:
+    - name: http
+      port: 8012
+      targetPort: 8012
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-secrets
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.secrets.replicas }}
+  selector:
+    matchLabels:
+      app: indus-secrets
+  template:
+    metadata:
+      labels:
+        app: indus-secrets
+    spec:
+      containers:
+        - name: indus-secrets
+          image: "{{ .Values.global.image.registry }}/indus-secrets:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8013
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8013"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: PLATFORM_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: PLATFORM_ENCRYPTION_KEY
+                  optional: true
+          resources:
+            {{- toYaml .Values.services.secrets.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-secrets
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-secrets
+  ports:
+    - name: http
+      port: 8013
+      targetPort: 8013
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-status
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-status
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.status.replicas }}
+  selector:
+    matchLabels:
+      app: indus-status
+  template:
+    metadata:
+      labels:
+        app: indus-status
+    spec:
+      containers:
+        - name: indus-status
+          image: "{{ .Values.global.image.registry }}/indus-status:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8014
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8014"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+          resources:
+            {{- toYaml .Values.services.status.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-status
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-status
+  ports:
+    - name: http
+      port: 8014
+      targetPort: 8014

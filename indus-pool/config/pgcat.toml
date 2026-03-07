@@ -1,0 +1,93 @@
+# PgCat Configuration File for Indus Pool
+# Database credentials use ${ENV_VAR} syntax for templating
+
+[general]
+# Host address to bind to
+host = "0.0.0.0"
+
+# Port to listen on for PostgreSQL protocol
+port = 5432
+
+# Whether to run in debug mode
+debug = false
+
+# Number of worker threads (0 = number of CPU cores)
+worker_threads = 4
+
+# Internal channel size for message passing
+channel_size = 256
+
+# Stats collection interval in seconds
+stats_interval = 15
+
+# TCP keepalive settings
+[tcp_keepalives]
+keepalives_idle = 5
+keepalives_interval = 5
+keepalives_count = 5
+
+# Prometheus metrics configuration
+[prometheus]
+enabled = true
+port = 9090
+
+# Admin database configuration
+[admin]
+username = "pgcat_admin"
+password = "${PGCAT_ADMIN_PASSWORD}"
+
+# Pool configuration for indusbase
+[[pool]]
+# Pool name
+name = "indusbase"
+
+# Pool mode: 'session' or 'transaction'
+# 'transaction' mode returns connections after each transaction
+pool_mode = "transaction"
+
+# Default database for this pool
+default_database = "${DB_NAME}"
+
+# Minimum number of idle connections per server
+min_pool_size = 5
+
+# Maximum number of connections per server
+max_pool_size = 50
+
+# Connection timeout in milliseconds
+connect_timeout = 5000
+
+# Idle timeout in milliseconds (10 minutes)
+idle_timeout = 600000
+
+# Statement timeout in milliseconds (0 = disabled)
+statement_timeout = 0
+
+# Health check query
+healthcheck_query = "SELECT 1"
+
+# Health check interval in seconds
+healthcheck_interval = 30
+
+# Ban time in seconds for failed servers
+ban_time = 60
+
+# Load balancing mode: 'random' or 'least_active'
+load_balancing_mode = "random"
+
+# Query parser settings
+query_parser_enabled = true
+query_parser_read_write_splitting = true
+
+# Primary server configuration
+[[pool.server]]
+host = "${DB_HOST}"
+port = ${DB_PORT}
+role = "primary"
+
+# User configuration for this pool
+[[pool.user]]
+username = "${DB_USER}"
+password = "${DB_PASSWORD}"
+pool_size = 50
+statement_timeout = 0

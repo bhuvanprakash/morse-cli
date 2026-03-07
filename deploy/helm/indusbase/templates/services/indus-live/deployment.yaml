@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-live
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-live
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.live.replicas }}
+  selector:
+    matchLabels:
+      app: indus-live
+  template:
+    metadata:
+      labels:
+        app: indus-live
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: indus-live
+          image: "{{ .Values.global.image.registry }}/indus-live:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8004
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8004"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.services.live.resources | nindent 12 }}
+      terminationGracePeriodSeconds: 60

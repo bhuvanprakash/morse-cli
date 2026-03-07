@@ -1,0 +1,139 @@
+receivers:
+  # OTLP receiver for traces - accepts both gRPC and HTTP
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Prometheus receiver for scraping metrics from services
+  prometheus:
+    config:
+      scrape_configs:
+        # Scrapes the collector's own metrics
+        - job_name: 'otel-collector'
+          static_configs:
+            - targets: ['localhost:8888']
+
+  # Jaeger receiver for legacy Jaeger format
+  jaeger:
+    protocols:
+      thrift_http:
+        endpoint: 0.0.0.0:14268
+      grpc:
+        endpoint: 0.0.0.0:14250
+      thrift_binary:
+        endpoint: 0.0.0.0:6832
+      thrift_compact:
+        endpoint: 0.0.0.0:6831
+
+  # Zipkin receiver for Zipkin traces
+  zipkin:
+    endpoint: 0.0.0.0:9411
+
+processors:
+  # Batch processor to reduce network calls
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+    send_batch_max_size: 1500
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Resource processor to add metadata
+  resource:
+    attributes:
+      - key: service.namespace
+        value: indusbase
+      - key: deployment.environment
+        value: production
+
+  # Filter processor to remove unwanted spans
+  filter:
+    spans:
+      exclude:
+        match_type: strict
+        attributes:
+          - key: http.status_code
+            value: "200"
+
+  # K8s attributes processor (if running in Kubernetes)
+  # k8sattributes:
+  #   passthrough: false
+  #   extract:
+  #     metadata:
+  #       - k8s.pod.name
+  #       - k8s.pod.uid
+  #       - k8s.deployment.name
+  #       - k8s.namespace.name
+  #       - k8s.node.name
+
+  # Tail sampling for traces
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+            - UNSET
+      - name: slow-traces-policy
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: rare-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  # Prometheus exporter for metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+    const_labels:
+      service: indusbase
+      environment: production
+
+  # OTLP exporter to send traces to backend
+  otlp:
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+    tls:
+      insecure: true
+
+  # Logging exporter for debugging
+  logging:
+    loglevel: debug
+
+  # Jaeger exporter (legacy)
+  jaeger:
+    endpoint: ${JAEGER_ENDPOINT:-jaeger:14250}
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp, jaeger, zipkin]
+      processors: [batch, memory_limiter, resource, tail_sampling]
+      exporters: [otlp, jaeger, logging]
+
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [batch, memory_limiter, resource]
+      exporters: [prometheus, logging]
+
+    logs:
+      receivers: [otlp]
+      processors: [batch, memory_limiter, resource]
+      exporters: [logging]
+
+  extensions:
+    - health_check
+    - zpages

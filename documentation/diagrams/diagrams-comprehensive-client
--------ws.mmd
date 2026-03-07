@@ -1,0 +1,27 @@
+flowchart TD
+    subgraph Client
+        WS[WebSocket<br/>Connection]
+    end
+    
+    subgraph "indus-live"
+        H[HTTP Handler]
+        S[Subscription<br/>Manager]
+        P[Publisher]
+    end
+    
+    subgraph PostgreSQL
+        R[Replication<br/>Slot]
+        PG[ WAL<br/>Stream]
+    end
+    
+    WS -->|Connect| H
+    H -->|Subscribe| S
+    S -->|Track Topic| WS
+    
+    R -->|Read WAL| PG
+    PG -->|Publish Change| P
+    P -->|Broadcast| S
+    S -->|Send Event| WS
+    
+    style WS fill:#f9f,color:#000
+    style PG fill:#dfd,color:#000

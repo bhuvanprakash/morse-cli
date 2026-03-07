@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-meta
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-meta
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.meta.replicas }}
+  selector:
+    matchLabels:
+      app: indus-meta
+  template:
+    metadata:
+      labels:
+        app: indus-meta
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: indus-meta
+          image: "{{ .Values.global.image.registry }}/indus-meta:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8003
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8003"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.services.meta.resources | nindent 12 }}

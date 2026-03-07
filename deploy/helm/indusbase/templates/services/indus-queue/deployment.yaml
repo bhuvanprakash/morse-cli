@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-queue
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-queue
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.queue.replicas }}
+  selector:
+    matchLabels:
+      app: indus-queue
+  template:
+    metadata:
+      labels:
+        app: indus-queue
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: indus-queue
+          image: "{{ .Values.global.image.registry }}/indus-queue:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8008
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8008"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: AUTH_SERVICE_URL
+              value: "http://{{ include "indusbase.fullname" . }}-auth:8001"
+            - name: LIVE_SERVICE_URL
+              value: "http://{{ include "indusbase.fullname" . }}-live:8004"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8008
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8008
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.services.queue.resources | nindent 12 }}

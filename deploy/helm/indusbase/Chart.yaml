@@ -1,0 +1,14 @@
+apiVersion: v2
+name: indusbase
+description: IndusBase - India's Postgres-native BaaS
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+maintainers:
+  - name: IndusBase Team
+    email: team@indusbase.com
+keywords:
+  - baas
+  - postgres
+  - india
+  - supabase-alternative

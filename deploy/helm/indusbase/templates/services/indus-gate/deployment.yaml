@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-gate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-gate
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.gate.replicas }}
+  selector:
+    matchLabels:
+      app: indus-gate
+  template:
+    metadata:
+      labels:
+        app: indus-gate
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: indus-gate
+          image: "{{ .Values.global.image.registry }}/indus-gate:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8000"
+            - name: UPSTREAM_AUTH
+              value: "http://{{ include "indusbase.fullname" . }}-auth:8001"
+            - name: UPSTREAM_QUERY
+              value: "http://{{ include "indusbase.fullname" . }}-query:8002"
+            - name: UPSTREAM_META
+              value: "http://{{ include "indusbase.fullname" . }}-meta:8003"
+            - name: UPSTREAM_LIVE
+              value: "http://{{ include "indusbase.fullname" . }}-live:8004"
+            - name: UPSTREAM_STORE
+              value: "http://{{ include "indusbase.fullname" . }}-store:8005"
+            - name: UPSTREAM_EDGE
+              value: "http://{{ include "indusbase.fullname" . }}-edge:8006"
+            - name: UPSTREAM_AI
+              value: "http://{{ include "indusbase.fullname" . }}-ai:8007"
+            - name: UPSTREAM_QUEUE
+              value: "http://{{ include "indusbase.fullname" . }}-queue:8008"
+            - name: UPSTREAM_NOTIFY
+              value: "http://{{ include "indusbase.fullname" . }}-notify:8009"
+            - name: UPSTREAM_CONFIG
+              value: "http://{{ include "indusbase.fullname" . }}-config:8010"
+            - name: UPSTREAM_AUDIT
+              value: "http://{{ include "indusbase.fullname" . }}-audit:8011"
+            - name: UPSTREAM_BILLING
+              value: "http://{{ include "indusbase.fullname" . }}-billing:8012"
+            - name: UPSTREAM_SECRETS
+              value: "http://{{ include "indusbase.fullname" . }}-secrets:8013"
+            - name: UPSTREAM_STATUS
+              value: "http://{{ include "indusbase.fullname" . }}-status:8014"
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: JWT_PUBLIC_KEY_PATH
+              value: /etc/indusbase/keys/jwt-public.pem
+          volumeMounts:
+            - name: jwt-public-key
+              mountPath: /etc/indusbase/keys
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.services.gate.resources | nindent 12 }}
+      volumes:
+        - name: jwt-public-key
+          secret:
+            secretName: {{ .Values.global.secrets.secretName }}
+            items:
+              - key: JWT_PUBLIC_KEY
+                path: jwt-public.pem

@@ -1,0 +1,41 @@
+{
+  "id": null,
+  "uid": "indusbase-audit-activity",
+  "title": "Audit Activity",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "tags": ["indusbase", "audit", "security"],
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Audit Events by Severity (1h)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "platform:audit_events_by_severity_hour" }]
+    },
+    {
+      "type": "stat",
+      "title": "Audit Ingest Failures (10m)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "sum(rate(audit_ingest_failures_total[10m]))" }]
+    },
+    {
+      "type": "stat",
+      "title": "Critical Audit Events (24h)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "increase(audit_events_total{severity=\"critical\"}[24h])" }]
+    },
+    {
+      "type": "logs",
+      "title": "Audit Service Logs",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": "Loki",
+      "targets": [{ "refId": "A", "expr": "{service=\"indus-audit\"}" }]
+    }
+  ]
+}

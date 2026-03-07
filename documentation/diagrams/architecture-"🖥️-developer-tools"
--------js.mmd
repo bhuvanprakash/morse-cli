@@ -1,0 +1,83 @@
+graph TB
+    subgraph "🖥️ Developer Tools"
+        JS["📦 indusbase-js<br/>TypeScript SDK"]
+        PY["🐍 indusbase-py<br/>Python SDK"]
+        CLI["⚡ cli<br/>Developer CLI"]
+    end
+    
+    subgraph "🌐 Gateway Layer [Port 8000]"
+        GATE["🌍 indus-gate<br/>Zig API Gateway<br/>JWT • Rate Limit • CORS"]
+    end
+    
+    subgraph "⚙️ Core Services"
+        AUTH["🔐 indus-auth<br/>Go :8001<br/>Auth+JWT+OTP+OAuth"]
+        QUERY["🗄️ indus-query<br/>Rust :8002<br/>Auto REST API"]
+        META["🛠️ indus-meta<br/>Go :8003<br/>DDL+Migrations"]
+    end
+    
+    subgraph "🔄 Realtime & Storage"
+        LIVE["⚡ indus-live<br/>Gleam :8004<br/>WebSocket Realtime"]
+        STORE["📁 indus-store<br/>Go :8005<br/>S3 Storage"]
+    end
+    
+    subgraph "🚀 Edge Computing"
+        EDGE["🚀 indus-edge<br/>Zig :8006<br/>Edge Functions"]
+    end
+    
+    subgraph "🧠 AI & Queue [Phase 4]"
+        AI["🤖 indus-ai<br/>Rust :8007<br/>Vector Search<br/>pgvector"]
+        QUEUE["📋 indus-queue<br/>Go :8008<br/>Jobs+Webhooks<br/>Cron"]
+        OLLAMA["🦙 ollama<br/>:11434<br/>Local Embeddings"]
+    end
+    
+    subgraph "🗄️ Data Layer"
+        POOL["🔄 indus-pool<br/>Rust :5432<br/>PgCat Pooler"]
+        DB[(PostgreSQL<br/>+pgvector)]
+        REDIS[("Redis<br/>Cache")]
+    end
+    
+    subgraph "📈 Observability [Phase 4]"
+        PRO["📊 Prometheus<br/>:9091"]
+        GRAF["📉 Grafana<br/>:3001"]
+        OTEL["🔍 OTEL<br/>:4317"]
+    end
+    
+    subgraph "💻 Dashboard"
+        STUDIO["💻 indus-studio<br/>SvelteKit :3000<br/>Web Dashboard"]
+    end
+    
+    %% Connections
+    JS --> GATE
+    PY --> GATE
+    CLI --> GATE
+    
+    GATE --> AUTH
+    GATE --> QUERY
+    GATE --> META
+    GATE --> LIVE
+    GATE --> STORE
+    GATE --> EDGE
+    GATE --> AI
+    GATE --> QUEUE
+    
+    AUTH --> POOL
+    QUERY --> POOL
+    META --> POOL
+    LIVE --> POOL
+    STORE --> POOL
+    AI --> POOL
+    QUEUE --> POOL
+    
+    POOL --> DB
+    LIVE --> REDIS
+    
+    AI --> OLLAMA
+    
+    GATE --> PRO
+    GATE --> GRAF
+    
+    STUDIO --> GATE
+    STUDIO --> QUERY
+    STUDIO --> META
+    STUDIO --> AI
+    STUDIO --> QUEUE

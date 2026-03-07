@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'indus-store/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'indus-store/**'
+
+defaults:
+  run:
+    working-directory: indus-store
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: indus_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+      env:
+        DATABASE_URL: postgres://test:test@localhost:5432/indus_test?sslmode=disable
+        INTERNAL_SECRET: test-secret-for-ci-only
+        JWT_PUBLIC_KEY_PATH: tests/test_key.pub
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        files: indus-store/coverage.out
+        flags: indus-store
+        name: indus-store
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Build
+      run: go build -v ./cmd/server
+
+    - name: Test Docker build
+      run: docker build -t indus-store:test .
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        working-directory: indus-store
+        args: --timeout=5m

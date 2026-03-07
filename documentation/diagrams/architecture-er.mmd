@@ -1,0 +1,31 @@
+erDiagram
+    USERS ||--o{ SESSIONS : has
+    USERS ||--o{ OAUTH_ACCOUNTS : has
+    USERS ||--o{ OTP_CODES : has
+    USERS ||--o{ COLLECTIONS : owns
+    USERS ||--o{ QUEUE_JOBS : creates
+    
+    COLLECTIONS ||--o{ DOCUMENTS : contains
+    COLLECTIONS {
+        uuid id PK
+        string name
+        string embedding_provider
+        int dimensions
+        uuid owner_id FK
+    }
+    
+    DOCUMENTS {
+        uuid id PK
+        uuid collection_id FK
+        text content
+        vector embedding
+        jsonb metadata
+    }
+    
+    QUEUE_JOBS {
+        uuid id PK
+        string queue_name
+        jsonb payload
+        string status
+        int priority
+    }

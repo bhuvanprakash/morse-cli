@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-docs
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-docs
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

@@ -1,0 +1,41 @@
+{
+  "id": null,
+  "uid": "indusbase-release-health",
+  "title": "Release Health",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["indusbase", "release", "slo"],
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Error Budget Burn Rate (5m)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "platform:release_error_budget_burn_rate_5m" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway Error Rate",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "sum(rate(http_requests_total{job=\"indus-gate\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{job=\"indus-gate\"}[5m])),1)" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Query Error Rate",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "sum(rate(http_requests_total{job=\"indus-query\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{job=\"indus-query\"}[5m])),1)" }]
+    },
+    {
+      "type": "logs",
+      "title": "Deploy/Release Logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": "Loki",
+      "targets": [{ "refId": "A", "expr": "{service=~\"indus-gate|indus-query|indus-meta\"} |~ \"deploy|release|rollback|canary\"" }]
+    }
+  ]
+}

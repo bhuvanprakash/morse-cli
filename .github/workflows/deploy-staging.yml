@@ -1,0 +1,45 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${KUBECONFIG_B64}" | base64 -d > "$HOME/.kube/config"
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_STAGING_B64 }}
+
+      - name: Deploy to staging
+        run: |
+          helm upgrade --install indusbase ./deploy/helm/indusbase \
+            --namespace indusbase-staging \
+            --create-namespace \
+            --set global.imageTag=${GITHUB_SHA::12} \
+            --wait --timeout 10m
+
+      - name: Write staging release metadata
+        run: |
+          mkdir -p deploy/releases/manifests
+          cat > deploy/releases/manifests/staging-${GITHUB_SHA::12}.json <<EOF
+          {
+            "environment": "staging",
+            "git_sha": "${GITHUB_SHA}",
+            "deployed_at_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF

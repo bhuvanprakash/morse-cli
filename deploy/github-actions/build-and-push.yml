@@ -1,0 +1,58 @@
+name: Build and Push All Docker Images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/indusbase
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service:
+          - { name: indus-gate, dir: indus-gate, platform: linux/amd64 }
+          - { name: indus-auth, dir: indus-auth, platform: linux/amd64 }
+          - { name: indus-query, dir: indus-query, platform: linux/amd64 }
+          - { name: indus-pool, dir: indus-pool, platform: linux/amd64 }
+          - { name: indus-meta, dir: indus-meta, platform: linux/amd64 }
+          - { name: indus-live, dir: indus-live, platform: linux/amd64 }
+          - { name: indus-store, dir: indus-store, platform: linux/amd64 }
+          - { name: indus-edge, dir: indus-edge, platform: linux/amd64 }
+          - { name: indus-ai, dir: indus-ai, platform: linux/amd64 }
+          - { name: indus-queue, dir: indus-queue, platform: linux/amd64 }
+          - { name: indus-notify, dir: indus-notify, platform: linux/amd64 }
+          - { name: indus-config, dir: indus-config, platform: linux/amd64 }
+          - { name: indus-studio, dir: indus-studio, platform: linux/amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.service.dir }}
+          platforms: ${{ matrix.service.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,scope=${{ matrix.service.name }},mode=max

@@ -1,0 +1,148 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'indusbase'
+    environment: 'production'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+          labels:
+            cluster: 'indusbase'
+
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # API Gateway - Main entry point
+  - job_name: 'indus-gate'
+    static_configs:
+      - targets: ['indus-gate:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Auth Service
+  - job_name: 'indus-auth'
+    static_configs:
+      - targets: ['indus-auth:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Query Service
+  - job_name: 'indus-query'
+    static_configs:
+      - targets: ['indus-query:8002']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Pool Service - Already serves Prometheus
+  - job_name: 'indus-pool'
+    static_configs:
+      - targets: ['indus-pool:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Meta Service
+  - job_name: 'indus-meta'
+    static_configs:
+      - targets: ['indus-meta:8003']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Live Service
+  - job_name: 'indus-live'
+    static_configs:
+      - targets: ['indus-live:8004']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Store Service
+  - job_name: 'indus-store'
+    static_configs:
+      - targets: ['indus-store:8005']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Edge Service
+  - job_name: 'indus-edge'
+    static_configs:
+      - targets: ['indus-edge:8006']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # AI Service
+  - job_name: 'indus-ai'
+    static_configs:
+      - targets: ['indus-ai:8007']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Queue Service
+  - job_name: 'indus-queue'
+    static_configs:
+      - targets: ['indus-queue:8008']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Notify Service
+  - job_name: 'indus-notify'
+    static_configs:
+      - targets: ['indus-notify:8009']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Config Service
+  - job_name: 'indus-config'
+    static_configs:
+      - targets: ['indus-config:8010']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Audit Service
+  - job_name: 'indus-audit'
+    static_configs:
+      - targets: ['indus-audit:8011']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Billing Service
+  - job_name: 'indus-billing'
+    static_configs:
+      - targets: ['indus-billing:8012']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Secrets Service
+  - job_name: 'indus-secrets'
+    static_configs:
+      - targets: ['indus-secrets:8013']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Status Service
+  - job_name: 'indus-status'
+    static_configs:
+      - targets: ['indus-status:8014']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Studio Service (Web UI)
+  - job_name: 'indus-studio'
+    static_configs:
+      - targets: ['indus-studio:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # OpenTelemetry Collector
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888', 'otel-collector:8889']
+    scrape_interval: 30s

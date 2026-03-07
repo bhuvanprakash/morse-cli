@@ -1,0 +1,70 @@
+{
+  "id": null,
+  "uid": "indusbase-backup-health",
+  "title": "IndusBase Backup Health",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["indusbase", "backup", "operations"],
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Latest Backup Age (hours)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "backup_latest_age_hours"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Backup Size Trend (bytes)",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "backup_size_bytes"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Verification Success / Failure",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(backup_verification_success_total[24h])",
+          "legendFormat": "success"
+        },
+        {
+          "refId": "B",
+          "expr": "increase(backup_verification_failure_total[24h])",
+          "legendFormat": "failure"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Restore Drill Duration (seconds)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "backup_restore_drill_duration_seconds"
+        }
+      ]
+    }
+  ]
+}

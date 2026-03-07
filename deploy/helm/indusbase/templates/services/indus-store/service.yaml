@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-store
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-store
+  ports:
+    - name: http
+      port: 8005
+      targetPort: 8005

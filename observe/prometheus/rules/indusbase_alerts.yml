@@ -1,0 +1,290 @@
+groups:
+  - name: indusbase_service_alerts
+    interval: 30s
+    rules:
+      # Service Down Alert
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 2 minutes"
+          runbook_url: "https://docs.indusbase.io/runbooks/service-down"
+
+      # High API Latency Alert
+      - alert: HighAPILatency
+        expr: |
+          (
+            histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=~"indus-.*"}[5m])) > 2
+            or
+            histogram_quantile(0.95, rate(http_server_duration_milliseconds_bucket{job=~"indus-.*"}[5m])) > 2000
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High P95 latency on {{ $labels.job }}"
+          description: "P95 latency is above 2 seconds for more than 5 minutes"
+          runbook_url: "https://docs.indusbase.io/runbooks/high-latency"
+
+      # Critical API Latency
+      - alert: CriticalAPILatency
+        expr: |
+          (
+            histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=~"indus-.*"}[5m])) > 5
+            or
+            histogram_quantile(0.99, rate(http_server_duration_milliseconds_bucket{job=~"indus-.*"}[5m])) > 5000
+          )
+        for: 3m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Critical P99 latency on {{ $labels.job }}"
+          description: "P99 latency is above 5 seconds for more than 3 minutes"
+
+      # High Auth Failure Rate
+      - alert: HighAuthFailureRate
+        expr: |
+          (
+            rate(authentication_failures_total[5m]) / rate(authentication_attempts_total[5m]) > 0.3
+            or
+            rate(auth_login_failures_total[5m]) / rate(auth_login_attempts_total[5m]) > 0.3
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High authentication failure rate on {{ $labels.job }}"
+          description: "Auth failure rate is above 30% for more than 5 minutes"
+
+      # Queue Depth High
+      - alert: QueueDepthHigh
+        expr: |
+          (
+            rabbitmq_queue_messages_ready{job="indus-queue"} > 10000
+            or
+            kafka_consumer_group_lag{job="indus-queue"} > 10000
+            or
+            queue_pending_messages{job="indus-queue"} > 10000
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Queue {{ $labels.queue }} has high pending messages"
+          description: "Queue depth is above 10,000 messages for more than 5 minutes"
+
+      # Dead Letter Queue Growing
+      - alert: DeadLetterQueueGrowing
+        expr: |
+          (
+            rabbitmq_queue_messages{job="indus-queue",queue=~".*dlq.*|.dead.*"} > 100
+            or
+            dead_letter_queue_size{job="indus-queue"} > 100
+          )
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Dead letter queue is growing"
+          description: "DLQ has more than 100 messages - check for failed processing"
+
+      # Pool Connections Exhausted
+      - alert: PoolConnectionsExhausted
+        expr: |
+          (
+            pg_pool_available_connections{job="indus-pool"} == 0
+            or
+            redis_pool_available{job="indus-pool"} == 0
+            or
+            postgres_connections_active{job="indus-pool"} / postgres_connections_max{job="indus-pool"} > 0.95
+          )
+        for: 3m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Connection pool exhausted on {{ $labels.job }}"
+          description: "Database/Redis connection pool is at capacity"
+
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5..",job=~"indus-.*"}[5m])
+            /
+            rate(http_requests_total{job=~"indus-.*"}[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.job }}"
+          description: "Error rate is above 5% for more than 5 minutes"
+
+      # Critical Error Rate
+      - alert: CriticalErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5..",job=~"indus-.*"}[5m])
+            /
+            rate(http_requests_total{job=~"indus-.*"}[5m])
+          ) > 0.20
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Critical 5xx error rate on {{ $labels.job }}"
+          description: "Error rate is above 20% for more than 2 minutes"
+
+      # High Request Rate (DDoS indicator)
+      - alert: HighRequestRate
+        expr: |
+          (
+            rate(http_requests_total{job="indus-gate"}[1m]) > 10000
+            or
+            rate(http_server_duration_milliseconds_count{job="indus-gate"}[1m]) > 10000
+          )
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Unusually high request rate on indus-gate"
+          description: "Request rate is above 10k/min - possible traffic spike or attack"
+
+      # Storage Service Issues
+      - alert: StorageServiceDegraded
+        expr: |
+          (
+            rate(storage_operations_failed_total[5m]) / rate(storage_operations_total[5m]) > 0.1
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Storage service has high failure rate"
+          description: "More than 10% of storage operations are failing"
+
+      # AI Service Embedding Failures
+      - alert: AIEmbeddingFailures
+        expr: |
+          (
+            rate(ai_embedding_failures_total[5m]) / rate(ai_embedding_requests_total[5m]) > 0.1
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "AI embedding service has high failure rate"
+          description: "More than 10% of embedding requests are failing"
+
+      # AI Search Latency High
+      - alert: AISearchLatencyHigh
+        expr: |
+          (
+            histogram_quantile(0.95, rate(ai_search_duration_seconds_bucket[5m])) > 5
+            or
+            histogram_quantile(0.95, rate(ai_vector_search_duration_ms_bucket[5m])) > 5000
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "AI search latency is high"
+          description: "P95 search latency is above 5 seconds"
+
+  - name: indusbase_enterprise_ops_alerts
+    interval: 30s
+    rules:
+      - alert: FailedSSOLoginsSpike
+        expr: |
+          (
+            increase(http_requests_total{job="indus-auth",path=~"/auth/sso/.*/acs",status=~"4..|5.."}[5m])
+          ) > 20
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Failed SSO logins spike detected"
+          description: "SSO ACS failures exceeded threshold for 5 minutes."
+
+      - alert: BackupStale24h
+        expr: (backup_latest_age_hours or vector(0)) > 24
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Latest backup is stale"
+          description: "Backup age is greater than 24 hours."
+
+      - alert: RestoreDrillFailed
+        expr: increase(backup_restore_drill_failures_total[24h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Restore drill failed"
+          description: "At least one restore drill failed in the last 24h."
+
+      - alert: BillingIngestionStopped
+        expr: absent(rate(billing_usage_events_ingested_total[30m]))
+        for: 30m
+        labels:
+          severity: warning
+          team: billing
+        annotations:
+          summary: "Billing ingestion appears stopped"
+          description: "No billing ingestion metric observed for 30 minutes."
+
+      - alert: AuditIngestFailures
+        expr: (rate(audit_ingest_failures_total[10m]) or vector(0)) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Audit ingest failures detected"
+          description: "indus-audit reported ingest failures in the last 10 minutes."
+
+      - alert: SecretsRotationOverdue
+        expr: |
+          (time() - (max by (secret_name) (secrets_last_rotation_timestamp{critical="true"}) or vector(0))) > (30 * 24 * 3600)
+        for: 30m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Critical secret rotation overdue"
+          description: "One or more critical secrets have not been rotated in 30 days."
+
+      - alert: SCIMEndpointHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="indus-auth",path=~"/scim/v2/.*",status=~"4..|5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job="indus-auth",path=~"/scim/v2/.*"}[5m])), 1)
+          ) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "SCIM endpoint error rate is high"
+          description: "SCIM endpoints exceed 10% error rate."

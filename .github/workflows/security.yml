@@ -1,0 +1,198 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH,MEDIUM
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+      - name: Upload Trivy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-results.sarif
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: npm audit (indusbase-js)
+        working-directory: indusbase-js
+        run: |
+          npm ci
+          npm audit --audit-level=high --json > ../npm-audit-js.json || true
+      - name: npm audit (indus-studio)
+        working-directory: indus-studio
+        run: |
+          npm ci
+          npm audit --audit-level=high --json > ../npm-audit-studio.json || true
+      - name: Upload npm audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-reports
+          path: |
+            npm-audit-js.json
+            npm-audit-studio.json
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Run pip-audit
+        working-directory: indusbase-py
+        run: pip-audit -f json -o ../pip-audit.json || true
+      - name: Upload pip-audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit Rust dependencies
+        run: |
+          mkdir -p security-reports
+          for svc in indus-query indus-ai indus-pool; do
+            if [ -f "$svc/Cargo.lock" ]; then
+              (cd "$svc" && cargo audit --json > "../security-reports/cargo-audit-${svc}.json" || true)
+            fi
+          done
+      - name: Upload cargo-audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-reports
+          path: security-reports/cargo-audit-*.json
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck on Go services
+        run: |
+          mkdir -p security-reports
+          for svc in indus-auth indus-meta indus-store indus-queue indus-notify indus-config indus-audit indus-billing indus-secrets indus-status cli; do
+            if [ -f "$svc/go.mod" ]; then
+              (cd "$svc" && govulncheck ./... > "../security-reports/govulncheck-${svc}.txt" || true)
+            fi
+          done
+      - name: Upload govulncheck reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: govulncheck-reports
+          path: security-reports/govulncheck-*.txt
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom/syft.spdx.json
+      - name: Generate CycloneDX SBOM (Node and Python)
+        run: |
+          mkdir -p sbom
+          npm install -g @cyclonedx/cyclonedx-npm
+          (cd indusbase-js && cyclonedx-npm --output-file ../sbom/cyclonedx-js.json) || true
+          pip install cyclonedx-bom
+          (cd indusbase-py && cyclonedx-py requirements -o ../sbom/cyclonedx-py.json) || true
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+
+  publish-summary:
+    runs-on: ubuntu-latest
+    needs: [trivy, npm-audit, pip-audit, cargo-audit, govulncheck, secret-scan, sbom]
+    if: always()
+    steps:
+      - name: Publish scan summary to IndusBase Meta (optional)
+        env:
+          META_SECURITY_INGEST_URL: ${{ secrets.META_SECURITY_INGEST_URL }}
+        run: |
+          if [ -z "${META_SECURITY_INGEST_URL}" ]; then
+            echo "META_SECURITY_INGEST_URL not set; skipping ingest"
+            exit 0
+          fi
+          STATUS="success"
+          if [ "${{ needs.trivy.result }}" != "success" ] || \
+             [ "${{ needs['secret-scan'].result }}" != "success" ]; then
+            STATUS="warning"
+          fi
+          payload=$(cat <<EOF
+          {
+            "scan_type": "dependency",
+            "tool_name": "security-workflow",
+            "status": "${STATUS}",
+            "summary": {
+              "issues": 0,
+              "trivy_result": "${{ needs.trivy.result }}",
+              "npm_audit_result": "${{ needs['npm-audit'].result }}",
+              "pip_audit_result": "${{ needs['pip-audit'].result }}",
+              "cargo_audit_result": "${{ needs['cargo-audit'].result }}",
+              "govulncheck_result": "${{ needs.govulncheck.result }}",
+              "secret_scan_result": "${{ needs['secret-scan'].result }}",
+              "sbom_result": "${{ needs.sbom.result }}"
+            }
+          }
+          EOF
+          )
+          curl -sS -X POST "${META_SECURITY_INGEST_URL}" \
+            -H "Content-Type: application/json" \
+            -d "${payload}" >/dev/null

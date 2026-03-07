@@ -1,0 +1,106 @@
+{
+  "id": null,
+  "uid": "indusbase-logs",
+  "title": "IndusBase Logs",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["indusbase", "logs", "loki"],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Loki",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "query": {
+          "query": "label_values({job=\"indusbase-containers\"}, service)",
+          "refId": "service-var"
+        },
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        }
+      },
+      {
+        "name": "level",
+        "type": "custom",
+        "query": "info,warn,error",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Log Rate by Service",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (rate({job=\"indusbase-containers\", service=~\"$service\"}[5m]))",
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Error Log Count (24h)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count_over_time({job=\"indusbase-containers\", service=~\"$service\", level=\"error\"}[24h])",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Live Log Stream",
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 8 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"indusbase-containers\", service=~\"$service\", level=~\"$level\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top Error Messages (Last 100)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 19 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (msg) (count_over_time({job=\"indusbase-containers\", service=~\"$service\", level=\"error\"} | json | line_format \"{{.msg}}\" [24h])))",
+          "queryType": "range"
+        }
+      ]
+    }
+  ]
+}

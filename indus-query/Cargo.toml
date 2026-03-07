@@ -1,0 +1,46 @@
+[package]
+name = "indus-query"
+version = "0.1.0"
+edition = "2021"
+authors = ["Indus Team <team@indus.dev>"]
+description = "Query Service - Dynamic REST/GraphQL API over PostgreSQL with RLS support"
+license = "MIT"
+repository = "https://github.com/indusbase/indus"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "8.3.0"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "timeout"] }
+tower = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+async-graphql = { version = "=7.0.17", features = ["uuid", "chrono", "dataloader", "dynamic-schema"] }
+async-graphql-axum = "=7.0.17"
+prometheus = { version = "0.13", features = ["process"] }
+axum-prometheus = "0.6"
+once_cell = "1"
+dotenvy = "0.15"
+futures = "0.3"
+async-trait = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+reqwest = { version = "0.11", features = ["json"] }
+tower = { version = "0.4", features = ["util"] }
+
+[[bench]]
+name = "query_bench"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

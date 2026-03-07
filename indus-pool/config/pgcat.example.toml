@@ -1,0 +1,267 @@
+# PgCat Configuration Example
+# This is a fully documented example configuration for PgCat
+# Copy this to pgcat.toml and customize for your environment
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+[general]
+# The host address to bind to for PostgreSQL connections
+# Use "0.0.0.0" to listen on all interfaces, or "127.0.0.1" for localhost only
+host = "0.0.0.0"
+
+# The port to listen on for PostgreSQL protocol connections
+# Default: 5432
+port = 5432
+
+# Enable debug mode for verbose logging
+# Default: false
+debug = false
+
+# Number of worker threads to handle connections
+# Set to 0 to use the number of available CPU cores
+# Default: 4
+worker_threads = 4
+
+# Internal channel size for message passing between threads
+# Increase if you see channel full errors under high load
+# Default: 256
+channel_size = 256
+
+# Stats collection interval in seconds
+# How often to collect and report pool statistics
+# Default: 15
+stats_interval = 15
+
+# =============================================================================
+# TCP KEEPALIVE SETTINGS
+# =============================================================================
+# These settings help detect dead connections and prevent resource leaks
+
+[tcp_keepalives]
+# Time in seconds before starting to send keepalive probes
+keepalives_idle = 5
+
+# Interval in seconds between keepalive probes
+keepalives_interval = 5
+
+# Number of unanswered probes before considering the connection dead
+keepalives_count = 5
+
+# =============================================================================
+# ADMIN INTERFACE
+# =============================================================================
+# The admin interface allows querying pool statistics via SQL
+
+[admin]
+# Username for admin connections
+# Connect to the 'pgcat' database with this user to query stats
+username = "pgcat_admin"
+
+# Password for admin user
+# IMPORTANT: Change this in production!
+password = "admin_password_change_me"
+
+# =============================================================================
+# POOL CONFIGURATION
+# =============================================================================
+# Pools define groups of database servers and their connection settings
+# You can define multiple pools for different use cases
+
+[[pool]]
+# Pool name - used for routing and identification
+# Clients connect to this pool name
+name = "default"
+
+# Pool mode determines when connections are returned to the pool
+# Options:
+#   "session" - Connection returned when client disconnects
+#   "transaction" - Connection returned after each transaction (better for high concurrency)
+pool_mode = "transaction"
+
+# Default database name for this pool
+# Used when client doesn't specify a database
+default_database = "app_database"
+
+# Default pool size per server
+# This is the number of connections PgCat will maintain to each server
+pool_size = 20
+
+# Minimum number of idle connections to keep ready
+# Helps reduce connection latency for new requests
+min_pool_size = 5
+
+# Maximum number of connections allowed per server
+# Set this based on your PostgreSQL max_connections setting
+max_pool_size = 100
+
+# Connection timeout in milliseconds
+# How long to wait when establishing a new server connection
+connect_timeout = 5000
+
+# Idle timeout in milliseconds
+# How long to keep idle connections before closing
+# 600000ms = 10 minutes
+idle_timeout = 600000
+
+# Statement timeout in milliseconds
+# Maximum time allowed for query execution (0 = disabled)
+statement_timeout = 0
+
+# Health check query
+# Simple query executed to verify server health
+healthcheck_query = "SELECT 1"
+
+# Health check interval in seconds
+# How often to check server health
+healthcheck_interval = 30
+
+# Ban time in seconds for failed servers
+# How long to temporarily remove a failed server from the pool
+ban_time = 60
+
+# Load balancing mode for distributing queries across replicas
+# Options:
+#   "random" - Random distribution
+#   "least_active" - Route to server with fewest active connections
+load_balancing_mode = "random"
+
+# -----------------------------------------------------------------------------
+# SERVER CONFIGURATION (within a pool)
+# -----------------------------------------------------------------------------
+# Define the PostgreSQL servers that belong to this pool
+
+# Primary server - handles writes and can handle reads
+[[pool.server]]
+host = "postgres-primary"
+port = 5432
+role = "primary"
+
+# Replica servers - handle read-only queries
+# Add as many replicas as needed for read scaling
+[[pool.server]]
+host = "postgres-replica-1"
+port = 5432
+role = "replica"
+
+[[pool.server]]
+host = "postgres-replica-2"
+port = 5432
+role = "replica"
+
+# -----------------------------------------------------------------------------
+# USER CONFIGURATION (within a pool)
+# -----------------------------------------------------------------------------
+# Define database users and their connection limits
+
+[[pool.user]]
+# Username as defined in PostgreSQL
+username = "app_user"
+
+# Password for this user
+# IMPORTANT: Change this in production!
+password = "app_password_change_me"
+
+# Pool size override for this specific user
+# This user's connections count toward this limit
+pool_size = 20
+
+[[pool.user]]
+username = "readonly_user"
+password = "readonly_password_change_me"
+pool_size = 10
+
+# Statement timeout specific to this user (in milliseconds)
+statement_timeout = 30000
+
+# =============================================================================
+# SHARDING CONFIGURATION
+# =============================================================================
+# For sharded database setups, define shards here
+# Each shard can have its own primary and replica servers
+
+# Shard 0
+[[shard]]
+index = 0
+
+[[shard.server]]
+host = "shard-0-primary"
+port = 5432
+role = "primary"
+
+[[shard.server]]
+host = "shard-0-replica"
+port = 5432
+role = "replica"
+
+# Shard 1
+[[shard]]
+index = 1
+
+[[shard.server]]
+host = "shard-1-primary"
+port = 5432
+role = "primary"
+
+[[shard.server]]
+host = "shard-1-replica"
+port = 5432
+role = "replica"
+
+# Add more shards as needed for your sharding scheme
+
+# =============================================================================
+# TLS CONFIGURATION (Optional)
+# =============================================================================
+# Enable TLS for encrypted client connections
+
+[tls]
+enabled = false
+cert_file = "/path/to/server.crt"
+key_file = "/path/to/server.key"
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+
+[logging]
+# Log level: "error", "warn", "info", "debug", "trace"
+level = "info"
+
+# Log format: "json" or "text"
+format = "json"
+
+# =============================================================================
+# EXAMPLE: ADDITIONAL POOL FOR ANALYTICS
+# =============================================================================
+# You can define multiple pools for different workloads
+
+[[pool]]
+name = "analytics"
+pool_mode = "session"  # Longer connections for analytics queries
+default_database = "analytics_db"
+pool_size = 5
+max_pool_size = 20
+
+[[pool.server]]
+host = "analytics-primary"
+port = 5432
+role = "primary"
+
+[[pool.user]]
+username = "analytics_user"
+password = "analytics_password_change_me"
+pool_size = 5
+statement_timeout = 300000  # 5 minutes for long queries
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# 1. Always change default passwords in production
+# 2. Adjust pool sizes based on your PostgreSQL max_connections
+# 3. Monitor connection usage and adjust pool sizes accordingly
+# 4. Use transaction pooling for high-concurrency workloads
+# 5. Enable TLS for production deployments
+# 6. Configure appropriate health check intervals for your infrastructure
+# =============================================================================

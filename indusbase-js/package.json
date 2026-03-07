@@ -1,0 +1,63 @@
+{
+    "name": "indusbase-js",
+    "version": "0.1.0",
+    "description": "The IndusBase JavaScript client library — India's Postgres-native BaaS",
+    "main": "./dist/cjs/index.js",
+    "module": "./dist/esm/index.js",
+    "types": "./dist/types/index.d.ts",
+    "exports": {
+        ".": {
+            "import": {
+                "types": "./dist/types/index.d.ts",
+                "default": "./dist/esm/index.js"
+            },
+            "require": {
+                "types": "./dist/types/index.d.ts",
+                "default": "./dist/cjs/index.js"
+            }
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "npm run build:clean && npm run build:esm && npm run build:cjs && npm run build:types",
+        "build:clean": "rm -rf dist",
+        "build:esm": "tsc -p tsconfig.build.json --outDir dist/esm --module esnext --moduleResolution bundler",
+        "build:cjs": "tsc -p tsconfig.build.json --outDir dist/cjs --module commonjs --moduleResolution node",
+        "build:types": "tsc -p tsconfig.build.json --outDir dist/types --declaration --emitDeclarationOnly",
+        "test": "bun test",
+        "lint": "tsc --noEmit",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "indusbase",
+        "backend",
+        "baas",
+        "postgres",
+        "india",
+        "realtime",
+        "storage",
+        "authentication",
+        "database",
+        "serverless"
+    ],
+    "author": "IndusBase",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/indusbase/indusbase-js.git"
+    },
+    "bugs": {
+        "url": "https://github.com/indusbase/indusbase-js/issues"
+    },
+    "homepage": "https://indusbase.io",
+    "devDependencies": {
+        "@types/node": "^20.10.0",
+        "bun-types": "latest",
+        "typescript": "^5.3.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

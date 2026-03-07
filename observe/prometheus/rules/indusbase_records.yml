@@ -1,0 +1,160 @@
+groups:
+  - name: indusbase_service_recording_rules
+    interval: 15s
+    rules:
+      # Service availability
+      - record: job:up:sum
+        expr: sum(up{job=~"indus-.*"})
+
+      - record: job:up:count
+        expr: count(up{job=~"indus-.*"})
+
+      - record: job:service_health:ratio
+        expr: job:up:sum / job:up:count
+
+      # Request rates
+      - record: job:http_requests:rate5m
+        expr: sum by (job) (rate(http_requests_total[5m]))
+
+      - record: job:http_requests:rate1m
+        expr: sum by (job) (rate(http_requests_total[1m]))
+
+      - record: job:http_status:rate5m
+        expr: sum by (job, status) (rate(http_requests_total[5m]))
+
+      # Latency percentiles
+      - record: job:http_latency_p50:rate5m
+        expr: histogram_quantile(0.50, sum by (job, le) (rate(http_request_duration_seconds_bucket[5m])))
+
+      - record: job:http_latency_p95:rate5m
+        expr: histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket[5m])))
+
+      - record: job:http_latency_p99:rate5m
+        expr: histogram_quantile(0.99, sum by (job, le) (rate(http_request_duration_seconds_bucket[5m])))
+
+      # Error rates
+      - record: job:http_errors:rate5m
+        expr: sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+
+      - record: job:http_error_rate:ratio
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum by (job) (rate(http_requests_total[5m]))
+
+      # Authentication metrics
+      - record: job:auth_attempts:rate5m
+        expr: sum by (job) (rate(authentication_attempts_total[5m]))
+
+      - record: job:auth_failures:rate5m
+        expr: sum by (job) (rate(authentication_failures_total[5m]))
+
+      - record: job:auth_failure_rate:ratio
+        expr: |
+          sum by (job) (rate(authentication_failures_total[5m]))
+          /
+          sum by (job) (rate(authentication_attempts_total[5m]))
+
+      - record: job:auth_successes:rate5m
+        expr: sum by (job) (rate(authentication_successes_total[5m]))
+
+      # Queue metrics
+      - record: job:queue_pending:max
+        expr: max by (queue) (queue_pending_messages{job="indus-queue"})
+
+      - record: job:queue_processed:rate5m
+        expr: sum by (job) (rate(queue_messages_processed_total[5m]))
+
+      - record: job:queue_dead_letter:max
+        expr: max by (queue) (dead_letter_queue_size{job="indus-queue"})
+
+      # Database connection pool
+      - record: job:db_connections_active:ratio
+        expr: |
+          sum by (job) (postgres_connections_active{job="indus-pool"})
+          /
+          sum by (job) (postgres_connections_max{job="indus-pool"})
+
+      - record: job:db_pool_available:max
+        expr: max by (job) (pg_pool_available_connections{job="indus-pool"})
+
+      # Storage metrics
+      - record: job:storage_operations:rate5m
+        expr: sum by (job) (rate(storage_operations_total[5m]))
+
+      - record: job:storage_failures:rate5m
+        expr: sum by (job) (rate(storage_operations_failed_total[5m]))
+
+      - record: job:storage_bytes:rate1h
+        expr: sum by (job) (rate(storage_bytes_total[1h]))
+
+      - record: job:storage_objects:count
+        expr: sum by (job) (storage_objects_total)
+
+      # AI/ML metrics
+      - record: job:ai_embeddings:rate5m
+        expr: sum by (job) (rate(ai_embedding_requests_total[5m]))
+
+      - record: job:ai_search:rate5m
+        expr: sum by (job) (rate(ai_search_requests_total[5m]))
+
+      - record: job:ai_search_latency_p95:rate5m
+        expr: histogram_quantile(0.95, sum by (job, le) (rate(ai_search_duration_seconds_bucket[5m])))
+
+      - record: job:ai_embedding_failures:rate5m
+        expr: sum by (job) (rate(ai_embedding_failures_total[5m]))
+
+      # Aggregated platform metrics
+      - record: platform:http_requests:rate5m
+        expr: sum(rate(http_requests_total{job=~"indus-.*"}[5m]))
+
+      - record: platform:http_latency_p95:rate5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=~"indus-.*"}[5m])))
+
+      - record: platform:http_error_rate:ratio
+        expr: |
+          sum(rate(http_requests_total{status=~"5..",job=~"indus-.*"}[5m]))
+          /
+          sum(rate(http_requests_total{job=~"indus-.*"}[5m]))
+
+      - record: platform:auth_attempts:rate5m
+        expr: sum(rate(authentication_attempts_total[5m]))
+
+      - record: platform:auth_failure_rate:ratio
+        expr: |
+          sum(rate(authentication_failures_total[5m]))
+          /
+          sum(rate(authentication_attempts_total[5m]))
+
+      - record: platform:queue_pending:sum
+        expr: sum(queue_pending_messages{job="indus-queue"})
+
+      - record: platform:ai_embeddings:rate5m
+        expr: sum(rate(ai_embedding_requests_total[5m]))
+
+  - name: indusbase_enterprise_ops_recording_rules
+    interval: 1m
+    rules:
+      - record: platform:usage_events_per_project_day
+        expr: |
+          sum by (project_id) (increase(usage_events_ingested_total[1d]))
+
+      - record: platform:audit_events_by_severity_hour
+        expr: |
+          sum by (severity) (increase(audit_events_total[1h]))
+
+      - record: platform:incident_count_by_severity
+        expr: |
+          sum by (severity) (status_incidents_total)
+
+      - record: platform:release_error_budget_burn_rate_5m
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5..",job=~"indus-gate|indus-query"}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"indus-gate|indus-query"}[5m])), 1)
+          ) / 0.01
+
+      - record: platform:sso_failed_logins_5m
+        expr: |
+          sum(increase(http_requests_total{job="indus-auth",path=~"/auth/sso/.*/acs",status=~"4..|5.."}[5m]))

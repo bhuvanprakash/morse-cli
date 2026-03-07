@@ -1,0 +1,81 @@
+---
+const apiBase = import.meta.env.STATUS_PUBLIC_BASE_URL || "http://localhost:8000";
+let payload = { data: { components: [], incidents: [], maintenance: [] }, error: null };
+try {
+  const res = await fetch(`${apiBase}/status/public`);
+  payload = await res.json();
+} catch (_) {
+  // keep fallback payload
+}
+const data = payload?.data ?? { components: [], incidents: [], maintenance: [] };
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IndusBase Status</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #fff7ed; color: #1f2937; }
+      .container { max-width: 980px; margin: 0 auto; padding: 24px; }
+      .card { background: white; border: 1px solid #fed7aa; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+      .ok { color: #15803d; font-weight: 600; }
+      .warn { color: #b45309; font-weight: 600; }
+      .err { color: #b91c1c; font-weight: 600; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #f3f4f6; padding: 8px 0; text-align: left; font-size: 14px; }
+      .pill { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 12px; background: #ffedd5; color: #9a3412; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>IndusBase System Status</h1>
+      <p>Region default: <strong>ap-south-1</strong> • Timezone: <strong>Asia/Kolkata</strong></p>
+
+      <section class="card">
+        <h2>Components</h2>
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Status</th><th>Updated</th></tr>
+          </thead>
+          <tbody>
+            {(data.components || []).map((c: any) => (
+              <tr>
+                <td>{c.name}</td>
+                <td><span class={c.status === 'operational' ? 'ok' : c.status === 'degraded' ? 'warn' : 'err'}>{c.status}</span></td>
+                <td>{c.updated_at}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Active / Recent Incidents</h2>
+        {(data.incidents || []).length === 0 ? <p>No incidents reported.</p> : null}
+        {(data.incidents || []).map((i: any) => (
+          <article style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <strong>{i.title}</strong>
+              <span class="pill">{i.severity}</span>
+              <span class="pill">{i.status}</span>
+            </div>
+            <p>{i.summary}</p>
+          </article>
+        ))}
+      </section>
+
+      <section class="card">
+        <h2>Scheduled Maintenance</h2>
+        {(data.maintenance || []).length === 0 ? <p>No scheduled maintenance.</p> : null}
+        {(data.maintenance || []).map((m: any) => (
+          <article style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
+            <strong>{m.title}</strong>
+            <p>{m.description}</p>
+            <small>{m.starts_at} → {m.ends_at}</small>
+          </article>
+        ))}
+      </section>
+    </main>
+  </body>
+  </html>

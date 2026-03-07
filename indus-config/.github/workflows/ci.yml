@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - "indus-config/**"
+  pull_request:
+    paths:
+      - "indus-config/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-config
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go mod tidy
+      - run: go build ./...

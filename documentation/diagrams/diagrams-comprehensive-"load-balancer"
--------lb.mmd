@@ -1,0 +1,46 @@
+flowchart TB
+    subgraph "Load Balancer"
+        LB[NGINX<br/>TLS Termination]
+    end
+    
+    subgraph "Kubernetes Cluster"
+        subgraph "Gateway"
+            GW1[Pod 1]
+            GW2[Pod 2]
+            GW3[Pod 3]
+        end
+        
+        subgraph "Services"
+            S1[indus-auth]
+            S2[indus-query]
+            S3[indus-meta]
+            S4[indus-ai]
+        end
+        
+        subgraph "Data"
+            POOL[indus-pool]
+            PG[(PostgreSQL<br/>Primary + Replicas)]
+            RD[Redis<br/>Cluster]
+        end
+    end
+    
+    LB --> GW1
+    LB --> GW2
+    LB --> GW3
+    
+    GW1 --> S1
+    GW2 --> S2
+    GW3 --> S3
+    GW1 --> S4
+    
+    S1 --> POOL
+    S2 --> POOL
+    S3 --> POOL
+    S4 --> POOL
+    
+    POOL --> PG
+    S1 --> RD
+    
+    style LB fill:#f9f,color:#000
+    style PG fill:#dfd,color:#000
+    style RD fill:#dfd,color:#000

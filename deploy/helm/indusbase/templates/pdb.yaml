@@ -1,0 +1,16 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $services := list "indus-gate" "indus-auth" "indus-query" "indus-live" "indus-store" "indus-edge" "indus-ai" "indus-queue" "indus-notify" "indus-config" "indus-audit" "indus-billing" "indus-secrets" "indus-status" }}
+{{- range $services }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ . }}-pdb
+  namespace: {{ $.Release.Namespace }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app: {{ . }}
+---
+{{- end }}
+{{- end }}

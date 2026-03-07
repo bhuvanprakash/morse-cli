@@ -1,0 +1,160 @@
+{{- if and .Values.canary.enabled .Values.canary.gateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-gate-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-gate-canary
+    component: indus-gate
+    track: canary
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.canary.gateway.replicas }}
+  selector:
+    matchLabels:
+      app: indus-gate-canary
+  template:
+    metadata:
+      labels:
+        app: indus-gate-canary
+        component: indus-gate
+        track: canary
+    spec:
+      containers:
+        - name: indus-gate
+          image: "{{ .Values.global.image.registry }}/indus-gate:{{ .Values.canary.gateway.imageTag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8000"
+            - name: UPSTREAM_AUTH
+              value: "http://{{ include "indusbase.fullname" . }}-auth:8001"
+            - name: UPSTREAM_QUERY
+              value: "http://{{ include "indusbase.fullname" . }}-query:8002"
+            - name: UPSTREAM_META
+              value: "http://{{ include "indusbase.fullname" . }}-meta:8003"
+            - name: UPSTREAM_LIVE
+              value: "http://{{ include "indusbase.fullname" . }}-live:8004"
+            - name: UPSTREAM_STORE
+              value: "http://{{ include "indusbase.fullname" . }}-store:8005"
+            - name: UPSTREAM_EDGE
+              value: "http://{{ include "indusbase.fullname" . }}-edge:8006"
+            - name: UPSTREAM_AI
+              value: "http://{{ include "indusbase.fullname" . }}-ai:8007"
+            - name: UPSTREAM_QUEUE
+              value: "http://{{ include "indusbase.fullname" . }}-queue:8008"
+            - name: UPSTREAM_NOTIFY
+              value: "http://{{ include "indusbase.fullname" . }}-notify:8009"
+            - name: UPSTREAM_CONFIG
+              value: "http://{{ include "indusbase.fullname" . }}-config:8010"
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: JWT_PUBLIC_KEY_PATH
+              value: /etc/indusbase/keys/jwt-public.pem
+          volumeMounts:
+            - name: jwt-public-key
+              mountPath: /etc/indusbase/keys
+              readOnly: true
+          resources:
+            {{- toYaml .Values.services.gate.resources | nindent 12 }}
+      volumes:
+        - name: jwt-public-key
+          secret:
+            secretName: {{ .Values.global.secrets.secretName }}
+            items:
+              - key: JWT_PUBLIC_KEY
+                path: jwt-public.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-gate-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-gate-canary
+    component: indus-gate
+    track: canary
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: indus-gate-canary
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+{{- end }}
+
+{{- if and .Values.canary.enabled .Values.canary.query.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-query-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-query-canary
+    component: indus-query
+    track: canary
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.canary.query.replicas }}
+  selector:
+    matchLabels:
+      app: indus-query-canary
+  template:
+    metadata:
+      labels:
+        app: indus-query-canary
+        component: indus-query
+        track: canary
+    spec:
+      containers:
+        - name: indus-query
+          image: "{{ .Values.global.image.registry }}/indus-query:{{ .Values.canary.query.imageTag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8002
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8002"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+          resources:
+            {{- toYaml .Values.services.query.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-query-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-query-canary
+    component: indus-query
+    track: canary
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: indus-query-canary
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+{{- end }}

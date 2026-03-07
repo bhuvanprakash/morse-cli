@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant User
+    participant App
+    participant Gate as indus-gate
+    participant Auth as indus-auth
+    participant DB as Database
+    participant Redis
+
+    User->>App: Enter email/password
+    App->>Gate: POST /auth/signin
+    Gate->>Auth: Forward request
+    Auth->>DB: Verify credentials
+    DB-->>Auth: User found
+    Auth->>Auth: Generate JWT tokens
+    Auth->>Redis: Store session
+    Auth-->>Gate: Return tokens
+    Gate-->>App: Return tokens
+    App->>App: Store tokens
+    App-->>User: Login successful

@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+: "${STUDIO_BASE_URL:=http://localhost:3000}"
+
+echo "IndusBase Studio Screenshot Readiness"
+echo "====================================="
+echo "Verify these flagship routes before recording screenshots or demos:"
+echo "  ${STUDIO_BASE_URL}/dashboard"
+echo "  ${STUDIO_BASE_URL}/queue"
+echo "  ${STUDIO_BASE_URL}/notifications"
+echo "  ${STUDIO_BASE_URL}/flags"
+echo "  ${STUDIO_BASE_URL}/billing"
+echo "  ${STUDIO_BASE_URL}/enterprise/sso"
+echo "  ${STUDIO_BASE_URL}/audit"
+echo "  ${STUDIO_BASE_URL}/security"
+echo "  ${STUDIO_BASE_URL}/status"
+echo "  ${STUDIO_BASE_URL}/support"
+echo "  ${STUDIO_BASE_URL}/ai"
+echo ""
+echo "Checklist"
+echo "  [ ] signed in as seeded admin user"
+echo "  [ ] at least one org and project exist"
+echo "  [ ] dashboard cards show live data"
+echo "  [ ] command palette opens with Cmd/Ctrl+K"
+echo "  [ ] no dead buttons on target pages"
+echo "  [ ] no localhost leaks in user-facing copy beyond configured defaults"

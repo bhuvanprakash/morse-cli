@@ -1,0 +1,58 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "indusbase.fullname" . }}-ingress
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    {{- if .Values.ingress.tls }}
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    {{- end }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+spec:
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.hosts.api }}
+        - {{ .Values.ingress.hosts.studio }}
+        - {{ .Values.ingress.hosts.docs }}
+      secretName: indusbase-tls
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hosts.api }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "indusbase.fullname" . }}-gate
+                port:
+                  number: 8000
+    - host: {{ .Values.ingress.hosts.studio }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "indusbase.fullname" . }}-studio
+                port:
+                  number: 3000
+    - host: {{ .Values.ingress.hosts.docs }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "indusbase.fullname" . }}-docs
+                port:
+                  number: 80
+{{- end }}

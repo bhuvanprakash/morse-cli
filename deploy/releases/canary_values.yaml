@@ -1,0 +1,10 @@
+canary:
+  enabled: true
+  gateway:
+    enabled: true
+    imageTag: canary
+    replicas: 1
+  query:
+    enabled: true
+    imageTag: canary
+    replicas: 1

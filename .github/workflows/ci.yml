@@ -1,0 +1,487 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.23'
+  RUST_VERSION: '1.75.0'
+  ZIG_VERSION: '0.14.0'
+  NODE_VERSION: '20'
+
+jobs:
+  # ============================================================================
+  # Change Detection
+  # ============================================================================
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gate: ${{ steps.filter.outputs.gate }}
+      auth: ${{ steps.filter.outputs.auth }}
+      query: ${{ steps.filter.outputs.query }}
+      pool: ${{ steps.filter.outputs.pool }}
+      meta: ${{ steps.filter.outputs.meta }}
+      live: ${{ steps.filter.outputs.live }}
+      store: ${{ steps.filter.outputs.store }}
+      studio: ${{ steps.filter.outputs.studio }}
+      cli: ${{ steps.filter.outputs.cli }}
+      shared: ${{ steps.filter.outputs.shared }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gate:
+              - 'indus-gate/**'
+            auth:
+              - 'indus-auth/**'
+            query:
+              - 'indus-query/**'
+            pool:
+              - 'indus-pool/**'
+            meta:
+              - 'indus-meta/**'
+            live:
+              - 'indus-live/**'
+            store:
+              - 'indus-store/**'
+            studio:
+              - 'indus-studio/**'
+            cli:
+              - 'cli/**'
+            shared:
+              - '.github/workflows/**'
+              - 'docker-compose.yml'
+              - 'Makefile'
+              - 'scripts/**'
+
+  # ============================================================================
+  # indus-gate (Zig)
+  # ============================================================================
+  gate:
+    needs: changes
+    if: ${{ needs.changes.outputs.gate == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-gate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Check formatting
+        run: zig build lint
+
+      - name: AST check
+        run: zig fmt --check --ast-check src/ tests/
+
+      - name: Build
+        run: zig build
+
+      - name: Run tests
+        run: zig build test
+
+  # ============================================================================
+  # indus-auth (Go)
+  # ============================================================================
+  auth:
+    needs: changes
+    if: ${{ needs.changes.outputs.auth == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-auth
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: indus_auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: indus-auth/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: indus-auth
+
+      - name: Run tests
+        run: go test -v ./...
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/indus_auth_test?sslmode=disable
+
+  # ============================================================================
+  # indus-query (Rust)
+  # ============================================================================
+  query:
+    needs: changes
+    if: ${{ needs.changes.outputs.query == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-query
+    env:
+      CARGO_TERM_COLOR: always
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/test
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-query-${{ hashFiles('indus-query/Cargo.lock') }}
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features native-tls,postgres --locked
+
+      - name: Run migrations
+        run: sqlx migrate run
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      - name: Run tests
+        run: cargo test
+
+  # ============================================================================
+  # indus-pool (Rust)
+  # ============================================================================
+  pool:
+    needs: changes
+    if: ${{ needs.changes.outputs.pool == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-pool
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pool-${{ hashFiles('indus-pool/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      - name: Run tests
+        run: cargo test
+
+  # ============================================================================
+  # indus-meta (Go)
+  # ============================================================================
+  meta:
+    needs: changes
+    if: ${{ needs.changes.outputs.meta == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-meta
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: indus_meta_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: indus-meta/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: indus-meta
+
+      - name: Run tests
+        run: go test -v ./...
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/indus_meta_test?sslmode=disable
+
+  # ============================================================================
+  # indus-live (Gleam)
+  # ============================================================================
+  live:
+    needs: changes
+    if: ${{ needs.changes.outputs.live == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-live
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '26'
+          gleam-version: '1.5.0'
+
+      - name: Build
+        run: gleam build
+
+      - name: Run tests
+        run: gleam test
+
+  # ============================================================================
+  # indus-store (Go)
+  # ============================================================================
+  store:
+    needs: changes
+    if: ${{ needs.changes.outputs.store == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-store
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: indus_store_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: indus-store/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: indus-store
+
+      - name: Run tests
+        run: go test -v ./...
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/indus_store_test?sslmode=disable
+
+  # ============================================================================
+  # indus-studio (SvelteKit)
+  # ============================================================================
+  studio:
+    needs: changes
+    if: ${{ needs.changes.outputs.studio == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indus-studio
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: indus-studio/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+  # ============================================================================
+  # CLI (Go)
+  # ============================================================================
+  cli:
+    needs: changes
+    if: ${{ needs.changes.outputs.cli == 'true' || needs.changes.outputs.shared == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: cli/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Run tests
+        run: go test -v ./...
+
+  # ============================================================================
+  # Integration Tests
+  # ============================================================================
+  integration:
+    runs-on: ubuntu-latest
+    needs: [changes, gate, auth, query, pool, meta, live, store, studio, cli]
+    if: always() && (needs.changes.outputs.shared == 'true' || github.event_name == 'push')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Create .env
+        run: cp .env.example .env
+
+      - name: Start services
+        run: docker compose up -d --build --wait
+
+      - name: Wait for health checks
+        run: |
+          echo "Waiting for services to be healthy..."
+          sleep 30
+          docker compose ps
+
+      - name: Run E2E tests
+        run: ./scripts/test-e2e.sh
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

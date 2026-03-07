@@ -1,0 +1,44 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'py-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#py-v}" >> $GITHUB_OUTPUT
+
+      - name: Update package version
+        working-directory: indusbase-py
+        run: |
+          sed -i 's/^version = .*/version = "${{ steps.version.outputs.VERSION }}"/' pyproject.toml
+
+      - name: Build package
+        working-directory: indusbase-py
+        run: python -m build
+
+      - name: Run tests
+        working-directory: indusbase-py
+        run: pip install -e ".[dev]" && python -m pytest
+
+      - name: Publish to PyPI
+        working-directory: indusbase-py
+        run: twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

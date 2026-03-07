@@ -1,0 +1,41 @@
+{
+  "id": null,
+  "uid": "indusbase-enterprise-sso",
+  "title": "Enterprise SSO",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "tags": ["indusbase", "enterprise", "sso"],
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Failed SSO Logins (5m)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "platform:sso_failed_logins_5m" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "SCIM Request Rate",
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(http_requests_total{job=\"indus-auth\",path=~\"/scim/v2/.*\"}[5m]))" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "SSO Error Rate",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{job=\"indus-auth\",path=~\"/auth/sso/.*/acs\",status=~\"4..|5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{job=\"indus-auth\",path=~\"/auth/sso/.*/acs\"}[5m])),1)"
+        }
+      ]
+    }
+  ]
+}

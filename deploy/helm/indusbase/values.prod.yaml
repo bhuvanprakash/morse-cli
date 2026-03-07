@@ -1,0 +1,28 @@
+global:
+  image:
+    pullPolicy: IfNotPresent
+
+postgresql:
+  storage: 100Gi
+
+redis:
+  storage: 10Gi
+
+services:
+  gate:
+    replicas: 3
+  auth:
+    replicas: 3
+  query:
+    replicas: 3
+  live:
+    replicas: 4
+  edge:
+    replicas: 4
+  notify:
+    replicas: 3
+  config:
+    replicas: 3
+
+studio:
+  replicas: 2

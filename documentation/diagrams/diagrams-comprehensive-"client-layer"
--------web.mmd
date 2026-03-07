@@ -1,0 +1,56 @@
+graph TB
+    subgraph "Client Layer"
+        WEB[Web Applications]
+        MOBILE[Mobile Apps]
+        SDK[SDKs<br/>JS/Python]
+        CLI[CLI Tools]
+    end
+    
+    subgraph "Gateway Layer"
+        GATE["indus-gate<br/>:8000<br/>Zig"]
+    end
+    
+    subgraph "Core Services"
+        AUTH["indus-auth<br/>:8001<br/>Go"]
+        QUERY["indus-query<br/>:8002<br/>Rust"]
+        META["indus-meta<br/>:8003<br/>Go"]
+    end
+    
+    subgraph "Extended Services"
+        LIVE["indus-live<br/>:8004<br/>Gleam"]
+        STORE["indus-store<br/>:8005<br/>Go"]
+        EDGE["indus-edge<br/>:8006<br/>Zig"]
+        AI["indus-ai<br/>:8007<br/>Rust"]
+        QUEUE["indus-queue<br/>:8008<br/>Go"]
+    end
+    
+    subgraph "Data Layer"
+        POOL["indus-pool<br/>:5432<br/>Rust"]
+        DB[(PostgreSQL<br/>+pgvector)]
+        REDIS[("Redis")]
+    end
+    
+    WEB --> GATE
+    MOBILE --> GATE
+    SDK --> GATE
+    CLI --> GATE
+    
+    GATE --> AUTH
+    GATE --> QUERY
+    GATE --> META
+    GATE --> LIVE
+    GATE --> STORE
+    GATE --> EDGE
+    GATE --> AI
+    GATE --> QUEUE
+    
+    AUTH --> POOL
+    QUERY --> POOL
+    META --> POOL
+    LIVE --> POOL
+    STORE --> POOL
+    AI --> POOL
+    QUEUE --> POOL
+    
+    POOL --> DB
+    LIVE --> REDIS

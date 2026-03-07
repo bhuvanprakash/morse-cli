@@ -1,0 +1,67 @@
+erDiagram
+    USERS ||--o{ SESSIONS : has
+    USERS ||--o{ OAUTH_ACCOUNTS : has
+    USERS ||--o{ OTP_CODES : has
+    USERS ||--o{ API_KEYS : has
+    USERS ||--o{ PROJECTS : owns
+    
+    PROJECTS ||--o{ TABLES : contains
+    PROJECTS ||--o{ COLLECTIONS : has
+    PROJECTS ||--o{ BUCKETS : manages
+    
+    TABLES ||--o{ COLUMNS : has
+    TABLES ||--o{ INDEXES : has
+    TABLES ||--o{ POLICIES : has
+    
+    COLUMNS ||--o{ CONSTRAINTS : has
+    
+    COLLECTIONS ||--o{ DOCUMENTS : contains
+    COLLECTIONS {
+        uuid id PK
+        string name
+        string description
+        string embedding_provider
+        int dimensions
+        uuid owner_id FK
+        timestamp created_at
+    }
+    
+    DOCUMENTS {
+        uuid id PK
+        uuid collection_id FK
+        text content
+        vector embedding
+        jsonb metadata
+        timestamp created_at
+    }
+    
+    BUCKETS ||--o{ OBJECTS : contains
+    
+    USERS {
+        uuid id PK
+        string email
+        string encrypted_password
+        string full_name
+        string avatar_url
+        string role
+        bool email_verified
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        string token
+        timestamp expires_at
+        timestamp created_at
+    }
+    
+    TABLES {
+        uuid id PK
+        uuid project_id FK
+        string name
+        string schema
+        jsonb columns
+        timestamp created_at
+    }

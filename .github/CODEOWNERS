@@ -1,0 +1,82 @@
+# Global default - core team owns everything
+* @indusbase/core-team
+
+# ============================================================================
+# Service Ownership
+# ============================================================================
+
+# Edge Gateway (Zig)
+/indus-gate/** @indusbase/gate-team @indusbase/zig-team
+
+# Authentication Service (Go)
+/indus-auth/** @indusbase/auth-team @indusbase/go-team
+
+# Query Engine (Rust)
+/indus-query/** @indusbase/query-team @indusbase/rust-team
+
+# Connection Pooler (Rust)
+/indus-pool/** @indusbase/pool-team @indusbase/rust-team
+
+# Metadata Service (Go)
+/indus-meta/** @indusbase/meta-team @indusbase/go-team
+
+# Realtime Engine (Gleam)
+/indus-live/** @indusbase/live-team @indusbase/gleam-team
+
+# Storage Service (Go)
+/indus-store/** @indusbase/store-team @indusbase/go-team
+
+# Web Studio (SvelteKit)
+/indus-studio/** @indusbase/studio-team @indusbase/frontend-team
+
+# CLI Tool (Go)
+/cli/** @indusbase/cli-team @indusbase/go-team
+
+# ============================================================================
+# Infrastructure & Configuration
+# ============================================================================
+
+# CI/CD Workflows
+/.github/workflows/** @indusbase/devops-team @indusbase/core-team
+
+# Docker configuration
+**/Dockerfile @indusbase/devops-team
+/docker-compose.yml @indusbase/devops-team
+
+# Scripts
+/scripts/** @indusbase/devops-team @indusbase/core-team
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+/README.md @indusbase/docs-team @indusbase/core-team
+/CONTRIBUTING.md @indusbase/docs-team @indusbase/core-team
+/docs/** @indusbase/docs-team
+
+# ============================================================================
+# Language-Specific Teams
+# ============================================================================
+
+# Go code review
+**/*.go @indusbase/go-team
+**/go.mod @indusbase/go-team
+**/go.sum @indusbase/go-team
+
+# Rust code review
+**/*.rs @indusbase/rust-team
+**/Cargo.toml @indusbase/rust-team
+**/Cargo.lock @indusbase/rust-team
+
+# Zig code review
+**/*.zig @indusbase/zig-team
+**/build.zig @indusbase/zig-team
+
+# Gleam code review
+**/*.gleam @indusbase/gleam-team
+**/gleam.toml @indusbase/gleam-team
+
+# TypeScript/Svelte code review
+**/*.ts @indusbase/frontend-team
+**/*.svelte @indusbase/frontend-team
+**/package.json @indusbase/frontend-team

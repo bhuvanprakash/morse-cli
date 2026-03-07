@@ -1,0 +1,199 @@
+global:
+  imageRegistry: ghcr.io/indusbase
+  imageTag: latest
+  region: ap-south-1
+  replicas: 2
+  image:
+    registry: ghcr.io/indusbase
+    pullPolicy: IfNotPresent
+    tag: latest
+  env:
+    DB_NAME: indusbase
+    DB_PORT: "5432"
+    REDIS_PORT: "6379"
+  secrets:
+    secretName: indusbase-secrets
+
+postgresql:
+  enabled: true
+  image: ankane/pgvector:latest
+  storage: 20Gi
+  storageClass: gp3
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+
+redis:
+  enabled: true
+  image: redis:7.2-alpine
+  storage: 2Gi
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+
+services:
+  gate:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+  auth:
+    replicas: 2
+    resources:
+      requests: { memory: 128Mi, cpu: 100m }
+      limits: { memory: 512Mi, cpu: 500m }
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+  query:
+    replicas: 2
+    resources:
+      requests: { memory: 128Mi, cpu: 100m }
+      limits: { memory: 512Mi, cpu: 1000m }
+  pool:
+    replicas: 1
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+  meta:
+    replicas: 1
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+  live:
+    replicas: 3
+    resources:
+      requests: { memory: 256Mi, cpu: 100m }
+      limits: { memory: 1Gi, cpu: 500m }
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 50
+  store:
+    replicas: 2
+    resources:
+      requests: { memory: 128Mi, cpu: 50m }
+  edge:
+    replicas: 3
+    resources:
+      requests: { memory: 256Mi, cpu: 100m }
+      limits: { memory: 1Gi, cpu: 2000m }
+  ai:
+    replicas: 2
+    resources:
+      requests: { memory: 256Mi, cpu: 250m }
+      limits: { memory: 1Gi, cpu: 2000m }
+  queue:
+    replicas: 2
+    resources:
+      requests: { memory: 128Mi, cpu: 100m }
+  notify:
+    replicas: 2
+    resources:
+      requests: { memory: 128Mi, cpu: 100m }
+  config:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+  audit:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+  billing:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+  secrets:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+  status:
+    replicas: 2
+    resources:
+      requests: { memory: 64Mi, cpu: 50m }
+      limits: { memory: 256Mi, cpu: 500m }
+
+studio:
+  replicas: 2
+  resources:
+    requests: { memory: 64Mi, cpu: 50m }
+    limits: { memory: 256Mi, cpu: 500m }
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  tls: true
+  certManager: true
+  email: admin@indusbase.com
+  hosts:
+    - host: api.indusbase.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tlsConfig:
+    - secretName: indusbase-tls
+      hosts:
+        - api.indusbase.com
+  hosts:
+    api: api.indusbase.com
+    studio: studio.indusbase.com
+    docs: docs.indusbase.com
+
+# Production hardening defaults
+resources:
+  gateway:
+    requests: { cpu: "200m", memory: "128Mi" }
+    limits: { cpu: "1", memory: "256Mi" }
+  api:
+    requests: { cpu: "100m", memory: "64Mi" }
+    limits: { cpu: "500m", memory: "256Mi" }
+  compute:
+    requests: { cpu: "200m", memory: "128Mi" }
+    limits: { cpu: "2", memory: "512Mi" }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+
+timezone: Asia/Kolkata
+
+postgres:
+  storageClass: gp3
+  storageSize: 100Gi
+
+canary:
+  enabled: false
+  gateway:
+    enabled: false
+    imageTag: canary
+    replicas: 1
+  query:
+    enabled: false
+    imageTag: canary
+    replicas: 1

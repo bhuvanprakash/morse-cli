@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "indusbase.fullname" . }}-auth
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: indus-auth
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001

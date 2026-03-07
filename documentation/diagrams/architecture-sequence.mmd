@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant Dev as Developer
+    participant Gate as indus-gate
+    participant Auth as indus-auth
+    participant Query as indus-query
+    participant Pool as indus-pool
+    participant DB as PostgreSQL
+
+    Dev->>Gate: Request with JWT
+    Gate->>Gate: Validate JWT
+    Gate->>Auth: Verify token
+    Auth-->>Gate: Token valid
+    Gate->>Query: Forward request
+    Query->>Pool: Get connection
+    Pool->>DB: Execute query
+    DB-->>Pool: Query results
+    Pool-->>Query: Results
+    Query-->>Gate: JSON response
+    Gate-->>Dev: HTTP Response

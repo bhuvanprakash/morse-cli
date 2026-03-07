@@ -1,0 +1,19 @@
+{
+    .name = "indus-edge",
+    .version = "0.1.0",
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/refs/heads/zig-0.14.tar.gz",
+            .hash = "1220dc7581262b4b9c53b648901cfe744c6ef9d99ce7977a576808b2ea44e",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "runtime",
+        "tests",
+        "README.md",
+    },
+}

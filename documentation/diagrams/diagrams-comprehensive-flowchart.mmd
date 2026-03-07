@@ -1,0 +1,23 @@
+flowchart TD
+    C[Clients] -->|Connect| P[indus-pool<br/>PgCat]
+    
+    P -->|Route| R{Routing<br/>Logic}
+    R -->|Pool A| PA[Pool A<br/>Shard 0]
+    R -->|Pool B| PB[Pool B<br/>Shard 1]
+    R -->|Pool C| PC[Pool C<br/>Shard 2]
+    
+    PA -->|Connect| DB1[(PostgreSQL<br/>Primary)]
+    PB -->|Connect| DB2[(PostgreSQL<br/>Replica 1)]
+    PC -->|Connect| DB3[(PostgreSQL<br/>Replica 2)]
+    
+    PA -.->|Health Check| H1[Monitor]
+    PB -.->|Health Check| H1
+    PC -.->|Health Check| H1
+    
+    P -->|Metrics| M[Prometheus<br/>Metrics]
+    
+    style C fill:#f9f,color:#000
+    style P fill:#f9f,color:#000
+    style DB1 fill:#dfd,color:#000
+    style DB2 fill:#dfd,color:#000
+    style DB3 fill:#dfd,color:#000

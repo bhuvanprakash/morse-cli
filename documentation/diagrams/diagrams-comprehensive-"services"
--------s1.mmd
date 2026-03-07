@@ -1,0 +1,37 @@
+flowchart TB
+    subgraph "Services"
+        S1[indus-gate]
+        S2[indus-auth]
+        S3[indus-query]
+        S4[indus-ai]
+    end
+    
+    subgraph "Metrics Collection"
+        OTEL[OTEL<br/>Collector]
+        PROM[Prometheus]
+    end
+    
+    subgraph "Visualization"
+        GRAF[Grafana]
+        ALERT[Alertmanager]
+    end
+    
+    S1 -->|Traces| OTEL
+    S2 -->|Traces| OTEL
+    S3 -->|Traces| OTEL
+    S4 -->|Traces| OTEL
+    
+    S1 -->|Metrics| PROM
+    S2 -->|Metrics| PROM
+    S3 -->|Metrics| PROM
+    S4 -->|Metrics| PROM
+    
+    OTEL -->|Process| PROM
+    PROM -->|Dashboards| GRAF
+    PROM -->|Alerts| ALERT
+    ALERT -->|Notify| Email[Email]
+    ALERT -->|Notify| Slack[Slack]
+    
+    style OTEL fill:#f9f,color:#000
+    style PROM fill:#9ff,color:#000
+    style GRAF fill:#9f9,color:#000

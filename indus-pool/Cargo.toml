@@ -1,0 +1,35 @@
+[package]
+name = "indus-pool"
+version = "0.1.0"
+edition = "2021"
+authors = ["Indus Team <team@indus.dev>"]
+description = "A Rust wrapper for PgCat connection pooler with health and metrics endpoints"
+license = "MIT"
+repository = "https://github.com/indus/indus-pool"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full", "process", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prometheus = "0.13"
+toml = "0.8"
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+signal-hook = "0.3"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+anyhow = "1"
+thiserror = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal", "process"] }
+
+[dev-dependencies]
+tower = { version = "0.4", features = ["util"] }
+hyper = { version = "1.0", features = ["full"] }
+
+[[bin]]
+name = "indus-pool"
+path = "src/main.rs"

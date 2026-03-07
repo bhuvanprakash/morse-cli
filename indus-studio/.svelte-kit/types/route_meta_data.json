@@ -1,0 +1,80 @@
+{
+	"/(app)": [
+		"src/routes/+layout.server.ts"
+	],
+	"/": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/ai": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/audit": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/auth-users": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/billing": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/dashboard": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/dpdp": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/enterprise/sso": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/flags": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(auth)/login": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/notifications": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/onboarding": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/queue": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/realtime": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/secrets": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/security": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/settings": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(auth)/signup": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/sql-editor": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/status": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/storage": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/support": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/table-editor": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/table-editor/[table]": [
+		"src/routes/+layout.server.ts"
+	],
+	"/(app)/trust-center": [
+		"src/routes/+layout.server.ts"
+	]
+}

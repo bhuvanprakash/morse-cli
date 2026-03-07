@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-docs
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: indus-docs
+  template:
+    metadata:
+      labels:
+        app: indus-docs
+    spec:
+      containers:
+        - name: docs
+          image: "{{ .Values.global.image.registry }}/docs:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 80
+              name: http

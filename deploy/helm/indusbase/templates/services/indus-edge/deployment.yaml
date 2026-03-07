@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "indusbase.fullname" . }}-edge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: indus-edge
+    {{- include "indusbase.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.edge.replicas }}
+  selector:
+    matchLabels:
+      app: indus-edge
+  template:
+    metadata:
+      labels:
+        app: indus-edge
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: indus-edge
+          image: "{{ .Values.global.image.registry }}/indus-edge:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8006
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8006"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: DATABASE_URL
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secrets.secretName }}
+                  key: INTERNAL_SECRET
+            - name: INDUSBASE_API_URL
+              value: "http://{{ include \"indusbase.fullname\" . }}-gate:8000"
+            - name: SECRETS_SERVICE_URL
+              value: "http://{{ include \"indusbase.fullname\" . }}-secrets:8013"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8006
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8006
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.services.edge.resources | nindent 12 }}

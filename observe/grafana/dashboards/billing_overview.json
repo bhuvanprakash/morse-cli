@@ -1,0 +1,34 @@
+{
+  "id": null,
+  "uid": "indusbase-billing-overview",
+  "title": "Billing Overview",
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["indusbase", "billing"],
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Usage Events Ingested",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "sum(rate(billing_usage_events_ingested_total[5m]))" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Invoice Preview Requests",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "sum(rate(http_requests_total{job=\"indus-billing\",path=\"/billing/invoices/preview\"}[5m]))" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Usage by Project (Daily)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "refId": "A", "expr": "platform:usage_events_per_project_day" }]
+    }
+  ]
+}
