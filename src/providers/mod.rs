@@ -1008,3 +1008,580 @@ impl ProviderRegistry {
         self.providers.get(name).map(|p| p.as_ref())
     }
 }
+
+/// Build a provider from config. Falls back to a mock when the provider has
+/// no credential, so commands keep working offline (clearly labelled).
+pub fn build_provider(cfg: &Config, provider_name: &str) -> Box<dyn Provider> {
+    let key = cfg.get_provider_key(provider_name).unwrap_or("");
+    if provider_name == "anthropic" && !key.is_empty() {
+        return Box::new(AnthropicProvider::new(key));
+    }
+    if provider_name == "gemini" && !key.is_empty() {
+        return Box::new(GeminiProvider::new(key));
+    }
+    if let Some((base, default_model)) = compatible_endpoint(provider_name) {
+        if !key.is_empty() || provider_name == "ollama" {
+            return Box::new(OpenAICompatProvider::new(provider_name, base, key, default_model));
+        }
+    }
+    Box::new(MockProvider::new(provider_name))
+}
+
+/// Split `provider/model` and build the right provider. Validates the key
+/// when a real provider is selected.
+pub async fn resolve_provider(cfg: &Config, model_spec: &str) -> MorseResult<Box<dyn Provider>> {
+    let (provider_name, model) = model_spec.split_once('/').ok_or_else(|| {
+        MorseError::new(
+            "PROV-SPEC",
+            &format!("Invalid model spec: {}", model_spec),
+            ErrorCategory::Config,
+        ).with_suggestion("Use format: provider/model (e.g. groq/llama-3.1-8b-instant)")
+    })?;
+
+    let key = cfg.get_provider_key(provider_name);
+    let is_mock = key.is_none() && provider_name != "ollama";
+    let provider = build_provider(cfg, provider_name);
+    let _ = model;
+    if !is_mock {
+        provider.validate_key().await?;
+    }
+    Ok(provider)
+}
+
+/// Resolve `provider/model`, honoring fallback: if the preferred provider has
+/// no key, walk the fallback chain and use the first configured one.
+pub fn resolve_with_fallback(cfg: &Config, model_spec: &str) -> (Box<dyn Provider>, String) {
+    let preferred = model_spec.split('/').next().unwrap_or("");
+    if cfg.get_provider_key(preferred).is_some() || preferred == "ollama" {
+        let model = model_spec.split_once('/').map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| default_model_for(cfg, preferred));
+        return (build_provider(cfg, preferred), model);
+    }
+    // Fallback chain ordered by general availability/quality.
+    for candidate in ["groq", "openai", "anthropic", "gemini", "deepseek", "ollama"] {
+        if cfg.get_provider_key(candidate).is_some() || candidate == "ollama" {
+            let model = default_model_for(cfg, candidate);
+            tracing::info!(from = preferred, to = candidate, "falling back to configured provider");
+            return (build_provider(cfg, candidate), model);
+        }
+    }
+    // Nothing configured: mock.
+    let model = model_spec.split_once('/').map(|(_, m)| m.to_string()).unwrap_or_else(|| "mock-model".into());
+    (build_provider(cfg, "mock"), model)
+}
+
+fn default_model_for(cfg: &Config, provider: &str) -> String {
+    // Prefer an explicitly routed model that targets this provider.
+    for spec in [&cfg.routing.default, &cfg.routing.quick_chat, &cfg.routing.small_model] {
+        if let Some((p, m)) = spec.split_once('/') {
+            if p == provider {
+                return m.to_string();
+            }
+        }
+    }
+    compatible_endpoint(provider).map(|(_, m)| m.to_string()).unwrap_or_else(|| "mock-model".into())
+}
+
+/// Public accessor for the default model a provider would use.
+pub fn default_model_for_pub(cfg: &Config, provider: &str) -> String {
+    default_model_for(cfg, provider)
+}
+
+// ---------------------------------------------------------------------------
+// Model list cache: live /v1/models fetched once, cached with a TTL so
+// palettes and `morse models` are instant and rate-limit friendly.
+// ---------------------------------------------------------------------------
+
+const MODEL_LIST_TTL_SECS: u64 = 6 * 3600;
+
+fn models_cache_path(provider: &str) -> Option<std::path::PathBuf> {
+    let root = std::env::current_dir().ok()?;
+    Some(root.join(".morse/cache/models").join(format!("{}.json", provider)))
+}
+
+/// Cached model list for a provider (empty when none/unknown).
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+pub struct CachedModels {
+    pub fetched_at: u64,
+    pub models: Vec<String>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Return cached live models for a provider if fresh; otherwise fetch and
+/// store. Never hard-fails — returns whatever cache exists.
+pub async fn cached_models(provider: &str, api_key: Option<&str>, refresh: bool) -> Vec<String> {
+    let path = match models_cache_path(provider) {
+        Some(p) => p,
+        None => return vec![],
+    };
+    if !refresh {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(c) = serde_json::from_str::<CachedModels>(&text) {
+                if now_secs().saturating_sub(c.fetched_at) < MODEL_LIST_TTL_SECS && !c.models.is_empty() {
+                    return c.models;
+                }
+            }
+        }
+    }
+
+    // Fetch (OpenAI-compatible only; anthropic/gemini use their own shapes).
+    let Some((base, _)) = compatible_endpoint(provider) else { return vec![] };
+    let url = format!("{}/models", base);
+    let client = match Client::builder().timeout(Duration::from_secs(8)).build() {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let mut req = client.get(&url);
+    if let Some(k) = api_key {
+        req = req.header("Authorization", format!("Bearer {}", k));
+    }
+    let parsed: Value = match req.send().await {
+        Ok(r) => match r.json().await {
+            Ok(v) => v,
+            Err(_) => return cached_or_empty(&path),
+        },
+        Err(_) => return cached_or_empty(&path),
+    };
+    let models: Vec<String> = parsed["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    if models.is_empty() {
+        return cached_or_empty(&path);
+    }
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string(&CachedModels { fetched_at: now_secs(), models: models.clone() }).unwrap_or_default(),
+    );
+    models
+}
+
+fn cached_or_empty(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<CachedModels>(&t).ok())
+        .map(|c| c.models)
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// High-level helpers used by the CLI
+// ---------------------------------------------------------------------------
+
+pub fn estimate_tokens(text: &str) -> i32 {
+    // ~4 chars per token is a good rule of thumb across LLM tokenizers.
+    text.len().div_ceil(4) as i32
+}
+
+pub fn system_prompt() -> String {
+    let os = std::env::consts::OS;
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+    let mut base = format!(
+        "You are Morse, an expert terminal-first AI coding assistant running natively on {os}. \
+         Working directory: {cwd}. \
+         Be concise and precise. Use Markdown with fenced code blocks for code. \
+         When asked to review or fix code, quote the exact lines you change. \
+         Never invent file contents \u{2014} if you have not seen a file, say so."
+    );
+    // Inject a compact repo map so the model knows the layout up-front
+    // (saves a tool round-trip for orientation questions).
+    if let Ok(root) = std::env::current_dir() {
+        if let Some(summary) = crate::context::project_summary(&root) {
+            base.push_str("\n\n");
+            base.push_str(&summary);
+        }
+    }
+    base
+}
+
+/// System prompt with additional session-specific context appended (e.g. an
+/// active mode's instructions or a task framing).
+pub fn system_prompt_with(extra: &str) -> String {
+    let mut s = system_prompt();
+    if !extra.trim().is_empty() {
+        s.push_str("\n\n");
+        s.push_str(extra.trim());
+    }
+    s
+}
+
+/// One-shot completion with streaming to stdout.
+/// Ordered model specs to try: the configured default first, then every
+/// other configured provider's default, then local Ollama. Used for runtime
+/// fallback when the preferred provider errors (dead model, quota, 403...).
+pub fn fallback_model_specs(cfg: &Config) -> Vec<String> {
+    let mut specs: Vec<String> = vec![cfg.routing.default.clone()];
+    for provider in [
+        "groq", "openai", "anthropic", "gemini", "deepseek", "mistral", "xai",
+        "cerebras", "together", "openrouter",
+    ] {
+        if cfg.get_provider_key(provider).is_some() {
+            let spec = format!("{}/{}", provider, default_model_for(cfg, provider));
+            if !specs.contains(&spec) {
+                specs.push(spec);
+            }
+        }
+    }
+    let ollama = "ollama/llama3.2".to_string();
+    if !specs.contains(&ollama) {
+        specs.push(ollama);
+    }
+    specs
+}
+
+pub async fn complete_text_streaming(cfg: &Config, prompt: &str) -> Result<()> {
+    // Refuse before spending if a budget/rate limit is already exhausted.
+    if let Err(e) = crate::ratelimit::gate(cfg) {
+        return Err(anyhow::anyhow!("{}", e));
+    }
+
+    let specs = fallback_model_specs(cfg);
+    let mut last_err: Option<anyhow::Error> = None;
+    let mut tried = 0usize;
+
+    for spec in &specs {
+        let (provider, model) = resolve_with_fallback(cfg, spec);
+        let provider_name = provider.name().to_string();
+
+        // Skip providers that obviously have no credential (except ollama/mock).
+        if provider.validate_key().await.is_err() {
+            continue;
+        }
+        tried += 1;
+        let req = CompletionRequest::new(&model, prompt)
+            .with_system(&system_prompt())
+            .with_temperature(0.7);
+
+        if isatty_stdout() {
+            eprintln!("{}", UI::new(true).muted(&format!("── {provider_name}/{model} ──")));
+        }
+
+        let mut first = true;
+        let mut on_chunk = |chunk: String| {
+            print!("{}", chunk);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            first = false;
+        };
+        match provider.stream(req, &mut on_chunk).await {
+            Ok(resp) => {
+                if first {
+                    println!("{}", resp.content);
+                } else {
+                    println!();
+                }
+                if resp.input_tokens > 0 || resp.output_tokens > 0 {
+                    crate::cost::record_call(&resp.provider, &resp.model, resp.input_tokens as i64, resp.output_tokens as i64);
+                    eprintln!(
+                        "{}",
+                        UI::new(true).muted(&format!(
+                            "── {} tokens in, {} out ──",
+                            resp.input_tokens, resp.output_tokens
+                        ))
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                let detail = truncate_for_note(&e.display(), 120);
+                if isatty_stdout() {
+                    eprintln!(
+                        "{}",
+                        UI::new(true).warning(&format!(
+                            "{provider_name} unavailable ({detail}) — trying next provider…"
+                        ))
+                    );
+                }
+                last_err = Some(anyhow::anyhow!(e.display()));
+            }
+        }
+    }
+
+    match last_err {
+        Some(e) if tried > 0 => Err(e.context("all configured providers failed")),
+        _ => Err(anyhow::anyhow!("no provider could be reached — run 'morse doctor'")),
+    }
+}
+
+/// Raw one-shot completion for scripts/pipes: answer only, no decorations,
+/// cache-aware (identical scripted calls are instant + free).
+pub async fn complete_raw(cfg: &Config, prompt: &str) -> Result<()> {
+    if let Err(e) = crate::ratelimit::gate(cfg) {
+        return Err(anyhow::anyhow!("{}", e));
+    }
+
+    // Cache lookup (raw mode shares the TUI's cache).
+    let cache = crate::ccache::CompletionCache::new(cfg);
+    let sys = system_prompt();
+    let history = vec![Message::user(prompt)];
+    let msgs = serde_json::to_string(&history).unwrap_or_default();
+    let key = crate::ccache::cache_key(&cfg.routing.default, &sys, &msgs, 0.7, 8192);
+    if cache.is_enabled() {
+        if let Ok(Some(entry)) = cache.get(&key) {
+            let content = entry.response["content"].as_str().unwrap_or("");
+            if !content.is_empty() {
+                println!("{}", content);
+                return Ok(());
+            }
+        }
+    }
+
+    let specs = fallback_model_specs(cfg);
+    let mut last_err: Option<anyhow::Error> = None;
+    for spec in &specs {
+        let (provider, model) = resolve_with_fallback(cfg, spec);
+        if provider.validate_key().await.is_err() {
+            continue;
+        }
+        let req = CompletionRequest::new(&model, prompt)
+            .with_system(&sys)
+            .with_temperature(0.7);
+        match provider.complete(req).await {
+            Ok(resp) => {
+                crate::cost::record_call(&resp.provider, &resp.model, resp.input_tokens as i64, resp.output_tokens as i64);
+                if cache.is_enabled() {
+                    let payload = serde_json::json!({
+                        "content": resp.content,
+                        "provider": resp.provider,
+                        "model": resp.model,
+                    });
+                    let _ = cache.put(&key, &resp.provider, &resp.model, &payload);
+                }
+                println!("{}", resp.content);
+                return Ok(());
+            }
+            Err(e) => last_err = Some(anyhow::anyhow!(e.display())),
+        }
+    }
+    match last_err {
+        Some(e) => Err(e.context("all configured providers failed")),
+        None => Err(anyhow::anyhow!("no provider could be reached — run 'morse doctor'")),
+    }
+}
+
+/// Persisted working-spec: remember which provider last worked so new
+/// sessions skip dead providers (no repeated 404/402 round-trips).
+pub fn load_working_spec() -> Option<String> {
+    let path = std::env::current_dir().ok()?.join(".morse/cache/working-spec.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let ts = v["saved_at"].as_u64()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    // Spec cache valid for 10 minutes; after that, re-probe the chain.
+    if now.saturating_sub(ts) > 600 {
+        return None;
+    }
+    v["spec"].as_str().map(|s| s.to_string())
+}
+
+pub fn save_working_spec(spec: &str) {
+    let Some(path) = std::env::current_dir().ok().map(|r| r.join(".morse/cache/working-spec.json")) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let v = serde_json::json!({
+        "spec": spec,
+        "saved_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    });
+    let _ = std::fs::write(path, serde_json::to_string(&v).unwrap_or_default());
+}
+
+fn truncate_for_note(s: &str, max: usize) -> String {
+    let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() <= max {
+        one
+    } else {
+        let cut: String = one.chars().take(max).collect();
+        format!("{}…", cut)
+    }
+}
+
+fn isatty_stdout() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+pub async fn complete(cfg: &Config, prompt: &str) -> MorseResult<CompletionResponse> {
+    metrics().increment("providers.complete.calls");
+    crate::ratelimit::gate(cfg).map_err(|e| {
+        MorseError::new("RATE-LIMIT", &e.to_string(), crate::errors::ErrorCategory::RateLimit)
+            .with_suggestion("Raise the budget in config or wait for the window to reset")
+    })?;
+    let (provider, model) = resolve_with_fallback(cfg, &cfg.routing.default.clone());
+    let req = CompletionRequest::new(&model, prompt).with_system(&system_prompt());
+    let resp = provider.complete(req).await?;
+    crate::cost::record_call(&resp.provider, &resp.model, resp.input_tokens as i64, resp.output_tokens as i64);
+    Ok(resp)
+}
+
+pub async fn complete_text(cfg: &Config, prompt: &str) -> Result<()> {
+    let resp = complete(cfg, prompt).await.map_err(|e| anyhow::anyhow!(e.display()))?;
+    println!("\n{} ({}):\n{}", resp.provider, resp.model, resp.content);
+    Ok(())
+}
+
+/// Show configured providers and the models they'd use.
+pub fn print_models(ui: &UI, cfg: &Config) {
+    ui.print(&ui.section("Providers"));
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for provider in [
+        "groq", "openai", "anthropic", "gemini", "deepseek", "mistral", "xai",
+        "together", "openrouter", "fireworks", "cerebras", "sambanova", "deepinfra",
+        "nebius", "novita", "hyperbolic", "lepton", "ollama",
+    ] {
+        let configured = cfg.get_provider_key(provider).is_some() || provider == "ollama";
+        let status = if configured { "configured" } else { "no key" };
+        let default_model = compatible_endpoint(provider).map(|(_, m)| m).unwrap_or("-");
+        rows.push(vec![provider.to_string(), status.to_string(), default_model.to_string()]);
+    }
+    let rows_ref: Vec<Vec<&str>> = rows.iter().map(|r| r.iter().map(|s| s.as_str()).collect()).collect();
+    ui.print(&ui.table(&["PROVIDER", "STATUS", "DEFAULT MODEL"], &rows_ref));
+    ui.print("");
+    ui.print(&ui.section("Routing"));
+    ui.print(&ui.kv_pair("default", &cfg.routing.default));
+    ui.print(&ui.kv_pair("quick chat", &cfg.routing.quick_chat));
+    ui.print(&ui.kv_pair("code review", &cfg.routing.code_review));
+    ui.print(&ui.kv_pair("architecture", &cfg.routing.architecture));
+    if !cfg.has_any_provider() {
+        ui.print("");
+        ui.print(&ui.warning("No API keys found. Set one to enable real responses:"));
+        ui.print(&ui.bullet("export GROQ_API_KEY=…   (free, fast)", 1));
+        ui.print(&ui.bullet("export OPENAI_API_KEY=…", 1));
+        ui.print(&ui.bullet("export ANTHROPIC_API_KEY=…", 1));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task-specific prompts
+// ---------------------------------------------------------------------------
+
+pub async fn fix_error(cfg: &Config, error: &str) -> Result<()> {
+    let prompt = format!(
+        "A developer hit this error. Diagnose the root cause and give the minimal fix with a code block.\n\n```\n{}\n```",
+        truncate(error, 8000)
+    );
+    complete_text(cfg, &prompt).await
+}
+
+pub async fn review_code(cfg: &Config) -> Result<()> {
+    let prompt = "Review the code in this project. Identify bugs, security issues, and improvements. \
+                  Prioritize findings by severity with file:line references.";
+    complete_text(cfg, prompt).await
+}
+
+pub async fn generate_commit(cfg: &Config) -> Result<()> {
+    let prompt = "Generate a conventional commit message (type(scope): summary) for the current changes. \
+                  Inspect with git commands if you can; otherwise ask for a diff.";
+    complete_text(cfg, prompt).await
+}
+pub async fn explain(cfg: &Config, target: &str) -> Result<()> {
+    let prompt = format!("Explain this code/symbol for a mid-level engineer: {}", target);
+    complete_text(cfg, &prompt).await
+}
+
+pub fn list_modes(cfg: &Config) -> Result<()> {
+    let _ = cfg;
+    println!("Available execution modes:");
+    println!("  - coder: Code generation and editing");
+    println!("  - architect: System design and architecture");
+    println!("  - debugger: Bug finding and fixing");
+    println!("  - reviewer: Code review and analysis");
+    Ok(())
+}
+
+pub fn build_router(cfg: Config) -> ModelRouter {
+    ModelRouter::new(cfg)
+}
+
+pub struct ModelRouter {
+    cfg: Config,
+}
+
+impl ModelRouter {
+    pub fn new(cfg: Config) -> Self {
+        Self { cfg }
+    }
+
+    pub fn resolve_provider(&self, name: &str) -> Option<Box<dyn Provider>> {
+        if self.cfg.get_provider_key(name).is_some() || name == "ollama" {
+            return Some(build_provider(&self.cfg, name));
+        }
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Offline mock responses (used when no API key is configured)
+// ---------------------------------------------------------------------------
+
+fn generate_mock_response(_provider_name: &str, user_msg: &str) -> String {
+    let lower_msg = user_msg.to_lowercase();
+    let trimmed = lower_msg.trim();
+
+    let greetings = ["hi", "hey", "hello"];
+    if greetings.iter().any(|g| {
+        trimmed == *g
+            || trimmed.starts_with(&format!("{} ", g))
+            || trimmed.starts_with(&format!("{},", g))
+            || trimmed.starts_with(&format!("{}!", g))
+    }) {
+        return "Hello! I'm Morse, your terminal-first AI coding assistant. How can I help you today?".to_string();
+    }
+    if lower_msg.contains("how are you") {
+        return "I'm doing well, thank you for asking! I'm here and ready to help with your coding tasks.".to_string();
+    }
+    if lower_msg.contains("what") && lower_msg.contains("name") {
+        return "I'm Morse, a terminal-first AI coding assistant built in Rust.".to_string();
+    }
+    if lower_msg.contains("what") && lower_msg.contains("model") {
+        return "Run 'morse models' to see all configured providers and their default models.\nUse 'morse --model provider/model' to override.".to_string();
+    }
+    if lower_msg.contains("memory leak") {
+        return "Memory leaks in Go can be caused by:\n1. Forgotten goroutines that never exit\n2. Unclosed resources (db connections, files)\n3. Growing slices/maps without bounds\n4. Global variables holding references\n5. Closures capturing variables\n\nUse 'morse fix \"error message\"' for specific error analysis.\nConfigure an API key for detailed analysis of your codebase.".to_string();
+    }
+    if lower_msg.contains("refactor") {
+        return "To refactor code:\n1. Identify the module or function to refactor\n2. Run 'morse graph-build' to understand code relationships\n3. Use 'morse review' to find refactoring opportunities\n4. Run 'morse fix' to get specific suggestions\n\nConfigure an API key for AI-powered refactoring assistance.".to_string();
+    }
+    if lower_msg.contains("test") {
+        return "For testing:\n1. Use 'morse swarm \"write tests for X\"' to generate tests\n2. The mock provider can generate basic test scaffolding\n3. With a real API key, I can analyze your test coverage\n\nAvailable test commands:\n- morse swarm \"implement tests\"\n- morse review\n- morse fix \"test failure details\"".to_string();
+    }
+    if lower_msg.contains("help") {
+        return "I can help you with:\n- Code editing and refactoring\n- Bug fixing and debugging\n- Code review and explanation\n- Writing tests\n- Generating commit messages\n- Building knowledge graphs\n- Running multi-agent swarms\n\nUse 'morse --help' to see all available commands.".to_string();
+    }
+    if lower_msg.contains("thank") {
+        return "You're welcome! Is there anything else I can help you with?".to_string();
+    }
+    if lower_msg.contains("bye") || lower_msg.contains("goodbye") {
+        return "Goodbye! Have a great day and happy coding!".to_string();
+    }
+    if lower_msg.contains("time") || lower_msg.contains("date") {
+        return format!("Current time: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    }
+
+    format!(
+        "[OFFLINE MODE] I understand you're asking about: \"{}\".\n\nTo get real AI responses, configure an API key. Quickest option:\n  export GROQ_API_KEY=…    # free tier at console.groq.com\nor add keys to ~/.morse/config.yaml.\n\nRun 'morse models' to see what's configured.",
+        truncate(user_msg, 200)
+    )
+}
