@@ -12,4 +12,5 @@ pub mod rag;
 pub mod secrets;
 pub mod session;
 pub mod trust;
+pub mod tools;
 pub mod ui;
