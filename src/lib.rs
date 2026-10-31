@@ -3,6 +3,7 @@ pub mod cost;
 pub mod db;
 pub mod errors;
 pub mod permissions;
+pub mod providers;
 pub mod secrets;
 pub mod session;
 pub mod trust;
