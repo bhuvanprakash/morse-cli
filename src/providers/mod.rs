@@ -517,3 +517,494 @@ impl Provider for OpenAICompatProvider {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Anthropic
+// ---------------------------------------------------------------------------
+
+pub struct AnthropicProvider {
+    api_key: String,
+    client: Client,
+}
+
+impl AnthropicProvider {
+    pub fn new(api_key: &str) -> Self {
+        Self { api_key: api_key.to_string(), client: http_client() }
+    }
+
+    /// Convert our message list to Anthropic's content-block format,
+    /// folding tool results into user messages and assistant tool calls
+    /// into assistant content blocks.
+    fn to_anthropic_messages(&self, req: &CompletionRequest) -> Vec<Value> {
+        let mut out: Vec<Value> = Vec::new();
+        for m in &req.messages {
+            if m.role == "tool" {
+                let block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
+                    "content": m.content,
+                });
+                // Anthropic requires tool results in a user message; merge
+                // consecutive tool results into a single user message.
+                let last_is_toolmerge = out
+                    .last()
+                    .and_then(|v| v.get("role"))
+                    .and_then(|r| r.as_str())
+                    == Some("user")
+                    && out
+                        .last()
+                        .and_then(|v| v.get("_toolmerge"))
+                        .and_then(|b| b.as_bool())
+                        == Some(true);
+                if last_is_toolmerge {
+                    if let Some(last) = out.last_mut() {
+                        if let Some(arr) = last["content"].as_array_mut() {
+                            arr.push(block);
+                        }
+                    }
+                } else {
+                    out.push(json!({
+                        "role": "user",
+                        "_toolmerge": true,
+                        "content": [block],
+                    }));
+                }
+                continue;
+            }
+            if let Some(tcs) = &m.tool_calls {
+                let mut blocks: Vec<Value> = Vec::new();
+                if !m.content.is_empty() {
+                    blocks.push(json!({"type": "text", "text": m.content}));
+                }
+                for tc in tcs {
+                    blocks.push(json!({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.arguments,
+                    }));
+                }
+                out.push(json!({"role": m.role, "content": blocks}));
+            } else {
+                // Strip the bookkeeping key if present.
+                out.push(json!({"role": m.role, "content": m.content}));
+            }
+        }
+        // Remove helper keys before sending.
+        for m in out.iter_mut() {
+            if let Some(obj) = m.as_object_mut() {
+                obj.remove("_toolmerge");
+            }
+        }
+        out
+    }
+
+    fn parse(&self, req: &CompletionRequest, parsed: &Value) -> CompletionResponse {
+        let mut content = String::new();
+        let mut tool_calls = Vec::new();
+        if let Some(blocks) = parsed["content"].as_array() {
+            for b in blocks {
+                match b["type"].as_str() {
+                    Some("text") => {
+                        if let Some(t) = b["text"].as_str() {
+                            content.push_str(t);
+                        }
+                    }
+                    Some("tool_use") => {
+                        tool_calls.push(ToolCall {
+                            id: b["id"].as_str().unwrap_or("").to_string(),
+                            name: b["name"].as_str().unwrap_or("").to_string(),
+                            arguments: b["input"].clone(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        CompletionResponse {
+            content,
+            model: req.model.clone(),
+            provider: "anthropic".to_string(),
+            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            input_tokens: parsed["usage"]["input_tokens"].as_i64().unwrap_or(0) as i32,
+            output_tokens: parsed["usage"]["output_tokens"].as_i64().unwrap_or(0) as i32,
+            confidence: None,
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for AnthropicProvider {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> MorseResult<CompletionResponse> {
+        metrics().increment("provider.anthropic.requests");
+        let body = json!({
+            "model": req.model,
+            "system": req.system_prompt.clone().unwrap_or_default(),
+            "messages": self.to_anthropic_messages(&req),
+            "max_tokens": req.max_tokens.unwrap_or(8192),
+            "temperature": req.temperature.unwrap_or(0.7),
+            "tools": req.tools.as_ref().map(|tools| tools.iter().map(|t| json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.parameters,
+            })).collect::<Vec<_>>()),
+        });
+        let body = strip_nulls(body);
+
+        let resp = with_retry("anthropic", 3, || async {
+            let sent = self
+                .client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| MorseError::new(
+                    "PROV-NET",
+                    &format!("Anthropic request failed: {}", e),
+                    ErrorCategory::Network,
+                ))?;
+            let status = sent.status();
+            let text = sent.text().await.map_err(|e| MorseError::new(
+                "PROV-RD",
+                &format!("Failed to read Anthropic response: {}", e),
+                ErrorCategory::Network,
+            ))?;
+            if !status.is_success() {
+                return Err(api_error("anthropic", "PROV-API", status, &text));
+            }
+            let parsed: Value = serde_json::from_str(&text).map_err(|e| MorseError::new(
+                "PROV-PARSE",
+                &format!("Failed to parse Anthropic response: {}", e),
+                ErrorCategory::Parse,
+            ))?;
+            Ok(self.parse(&req, &parsed))
+        })
+        .await?;
+        metrics().increment("provider.anthropic.success");
+        Ok(resp)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        on_chunk: &mut (dyn FnMut(String) + Send),
+    ) -> MorseResult<CompletionResponse> {
+        use futures_util::StreamExt;
+        let mut body = json!({
+            "model": req.model,
+            "system": req.system_prompt.clone().unwrap_or_default(),
+            "messages": self.to_anthropic_messages(&req),
+            "max_tokens": req.max_tokens.unwrap_or(8192),
+            "temperature": req.temperature.unwrap_or(0.7),
+            "stream": true,
+        });
+        body = strip_nulls(body);
+
+        let sent = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| MorseError::new(
+                "PROV-NET",
+                &format!("Anthropic streaming request failed: {}", e),
+                ErrorCategory::Network,
+            ))?;
+        let status = sent.status();
+        if !status.is_success() {
+            let text = sent.text().await.unwrap_or_default();
+            return Err(api_error("anthropic", "PROV-API", status, &text));
+        }
+
+        let mut content = String::new();
+        let mut input_tokens = 0i32;
+        let mut output_tokens = 0i32;
+        let mut stream = sent.bytes_stream();
+        let mut buffer = String::new();
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| MorseError::new(
+                "PROV-STREAM",
+                &format!("Anthropic stream interrupted: {}", e),
+                ErrorCategory::Network,
+            ))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(nl) = buffer.find('\n') {
+                let line: String = buffer.drain(..=nl).collect();
+                let line = line.trim();
+                let Some(data) = line.strip_prefix("data:") else { continue };
+                let data = data.trim();
+                if data.is_empty() {
+                    continue;
+                }
+                let Ok(ev) = serde_json::from_str::<Value>(data) else { continue };
+                match ev["type"].as_str() {
+                    Some("content_block_delta") => {
+                        if let Some(t) = ev["delta"]["text"].as_str() {
+                            content.push_str(t);
+                            on_chunk(t.to_string());
+                        }
+                    }
+                    Some("message_start") => {
+                        input_tokens = ev["message"]["usage"]["input_tokens"].as_i64().unwrap_or(0) as i32;
+                    }
+                    Some("message_delta") => {
+                        output_tokens = ev["usage"]["output_tokens"].as_i64().unwrap_or(output_tokens as i64) as i32;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(CompletionResponse {
+            content,
+            model: req.model,
+            provider: "anthropic".to_string(),
+            tool_calls: None,
+            input_tokens,
+            output_tokens,
+            confidence: None,
+        })
+    }
+
+    fn models_available(&self) -> Vec<String> {
+        vec![
+            "claude-sonnet-4-5".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+            "claude-haiku-4-5".to_string(),
+            "claude-3-5-haiku-latest".to_string(),
+        ]
+    }
+
+    async fn validate_key(&self) -> MorseResult<()> {
+        if self.api_key.is_empty() {
+            return Err(MorseError::new(
+                "PROV-KEY",
+                "Anthropic API key not configured",
+                ErrorCategory::Auth,
+            ).with_suggestion("Set ANTHROPIC_API_KEY environment variable"));
+        }
+        Ok(())
+    }
+}
+
+/// Recursively remove JSON nulls (Anthropic rejects unknown null fields).
+fn strip_nulls(v: Value) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k, strip_nulls(v)))
+                .collect(),
+        ),
+        Value::Array(arr) => Value::Array(arr.into_iter().map(strip_nulls).collect()),
+        other => other,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gemini (Google AI)
+// ---------------------------------------------------------------------------
+
+pub struct GeminiProvider {
+    api_key: String,
+    client: Client,
+}
+
+impl GeminiProvider {
+    pub fn new(api_key: &str) -> Self {
+        Self { api_key: api_key.to_string(), client: http_client() }
+    }
+
+    fn url(&self, model: &str, stream: bool) -> String {
+        let action = if stream { "streamGenerateContent" } else { "generateContent" };
+        format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:{}?key={}",
+            model, action, self.api_key
+        )
+    }
+
+    fn to_gemini_contents(&self, req: &CompletionRequest) -> Vec<Value> {
+        let mut out = Vec::new();
+        for m in &req.messages {
+            let role = if m.role == "assistant" { "model" } else { "user" };
+            let text = if m.role == "tool" {
+                format!("[tool result {}] {}", m.tool_call_id.as_deref().unwrap_or(""), m.content)
+            } else {
+                m.content.clone()
+            };
+            out.push(json!({"role": role, "parts": [{"text": text}]}));
+        }
+        out
+    }
+}
+
+#[async_trait]
+impl Provider for GeminiProvider {
+    fn name(&self) -> &str {
+        "gemini"
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> MorseResult<CompletionResponse> {
+        metrics().increment("provider.gemini.requests");
+        let body = json!({
+            "systemInstruction": req.system_prompt.as_ref().map(|s| json!({"parts": [{"text": s}]})),
+            "contents": self.to_gemini_contents(&req),
+            "generationConfig": {
+                "maxOutputTokens": req.max_tokens.unwrap_or(8192),
+                "temperature": req.temperature.unwrap_or(0.7),
+            },
+        });
+        let body = strip_nulls(body);
+
+        let resp = with_retry("gemini", 3, || async {
+            let sent = self
+                .client
+                .post(self.url(&req.model, false))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| MorseError::new(
+                    "PROV-NET",
+                    &format!("Gemini request failed: {}", e),
+                    ErrorCategory::Network,
+                ))?;
+            let status = sent.status();
+            let text = sent.text().await.map_err(|e| MorseError::new(
+                "PROV-RD",
+                &format!("Failed to read Gemini response: {}", e),
+                ErrorCategory::Network,
+            ))?;
+            if !status.is_success() {
+                return Err(api_error("gemini", "PROV-API", status, &text));
+            }
+            let parsed: Value = serde_json::from_str(&text).map_err(|e| MorseError::new(
+                "PROV-PARSE",
+                &format!("Failed to parse Gemini response: {}", e),
+                ErrorCategory::Parse,
+            ))?;
+            let content = parsed["candidates"][0]["content"]["parts"]
+                .as_array()
+                .map(|parts| {
+                    parts.iter()
+                        .filter_map(|p| p["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .unwrap_or_default();
+            let input_tokens = parsed["usageMetadata"]["promptTokenCount"].as_i64().unwrap_or(0) as i32;
+            let output_tokens = parsed["usageMetadata"]["candidatesTokenCount"].as_i64().unwrap_or(0) as i32;
+            Ok(CompletionResponse {
+                content,
+                model: req.model.clone(),
+                provider: "gemini".to_string(),
+                tool_calls: None,
+                input_tokens,
+                output_tokens,
+                confidence: None,
+            })
+        })
+        .await?;
+        metrics().increment("provider.gemini.success");
+        Ok(resp)
+    }
+
+    fn models_available(&self) -> Vec<String> {
+        vec![
+            "gemini-2.0-flash".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.5-pro".to_string(),
+        ]
+    }
+
+    async fn validate_key(&self) -> MorseResult<()> {
+        if self.api_key.is_empty() {
+            return Err(MorseError::new(
+                "PROV-KEY",
+                "Gemini API key not configured",
+                ErrorCategory::Auth,
+            ).with_suggestion("Set GEMINI_API_KEY environment variable"));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mock provider (offline / no keys configured)
+// ---------------------------------------------------------------------------
+
+pub struct MockProvider {
+    name: String,
+}
+
+impl MockProvider {
+    pub fn new(name: &str) -> Self {
+        Self { name: name.to_string() }
+    }
+}
+
+#[async_trait]
+impl Provider for MockProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> MorseResult<CompletionResponse> {
+        metrics().increment("provider.mock.requests");
+        let last_msg = req.messages.last().map(|m| m.content.as_str()).unwrap_or("");
+        let response = generate_mock_response(&self.name, last_msg);
+        Ok(CompletionResponse {
+            content: response,
+            model: req.model,
+            provider: self.name.clone(),
+            tool_calls: None,
+            input_tokens: estimate_tokens(last_msg),
+            output_tokens: 0,
+            confidence: Some(1.0),
+        })
+    }
+
+    fn models_available(&self) -> Vec<String> {
+        vec!["mock-model".to_string()]
+    }
+
+    async fn validate_key(&self) -> MorseResult<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registry / resolution
+// ---------------------------------------------------------------------------
+
+pub struct ProviderRegistry {
+    providers: std::collections::HashMap<String, Box<dyn Provider>>,
+}
+
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderRegistry {
+    pub fn new() -> Self {
+        Self { providers: std::collections::HashMap::new() }
+    }
+
+    pub fn register(&mut self, name: &str, provider: Box<dyn Provider>) {
+        self.providers.insert(name.to_string(), provider);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&dyn Provider> {
+        self.providers.get(name).map(|p| p.as_ref())
+    }
+}
