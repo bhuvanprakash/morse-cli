@@ -544,3 +544,202 @@ fn load_or_build(root: &Path) -> Result<CodeGraph> {
     graph.build()?;
     Ok(graph)
 }
+
+pub fn build(cfg: &Config) -> Result<()> {
+    let _ = cfg;
+    let root = std::env::current_dir()?;
+    let mut graph = CodeGraph::new(&root);
+    graph.build()?;
+    let stats = graph.stats();
+    let graph_path = root.join(".morse").join("graph.json");
+    graph.export(&graph_path)?;
+    println!("Graph built successfully");
+    println!("Symbols: {}", stats["symbols"]);
+    println!("Relationships: {}", stats["edges"]);
+    println!("Exported to: {}", graph_path.display());
+    Ok(())
+}
+
+pub fn query(cfg: &Config, q: &str) -> Result<()> {
+    let _ = cfg;
+    let root = std::env::current_dir()?;
+    let graph = load_or_build(&root)?;
+
+    let results = graph.query(q)?;
+    if results.is_empty() {
+        println!("No results found for '{}'", q);
+        return Ok(());
+    }
+
+    println!("Found {} results:\n", results.len());
+    for (i, node) in results.iter().enumerate() {
+        println!("{}. {} ({})", i + 1, node.name, node.kind);
+        println!("   File: {}:{}-{}", node.file, node.start_line, node.end_line);
+        println!("   Callers: {}, Callees: {}", node.callers.len(), node.callees.len());
+        println!();
+    }
+    Ok(())
+}
+
+pub fn impact(cfg: &Config, symbol: &str) -> Result<()> {
+    let _ = cfg;
+    let root = std::env::current_dir()?;
+    let graph = load_or_build(&root)?;
+
+    if graph.get_symbol(symbol).is_none() {
+        return Err(anyhow::anyhow!(
+            "Symbol '{}' not found. Run 'morse graph-query {}' to search.",
+            symbol,
+            symbol
+        ));
+    }
+
+    let impact = graph.get_impact_analysis(symbol);
+    println!("Impact Analysis: Changing {}", symbol);
+    println!("Affected Symbols: {}\n", impact.len());
+
+    if impact.is_empty() {
+        println!("No direct dependents found (leaf symbol).");
+    } else {
+        println!("Blast Radius:");
+        for (id, depth) in impact {
+            if let Some(node) = graph.get_symbol(&id) {
+                println!("  Depth {}: {} ({}) — {}", depth, node.name, node.kind, node.file);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn visualize(cfg: &Config) -> Result<()> {
+    let _ = cfg;
+    let root = std::env::current_dir()?;
+    let graph = load_or_build(&root)?;
+
+    let dot = graph.visualize();
+    println!("{}", dot);
+
+    let output_path = root.join(".morse").join("graph.dot");
+    std::fs::write(&output_path, &dot)?;
+    println!("Saved to: {}", output_path.display());
+    println!("Render with: dot -Tpng {} -o graph.png", output_path.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_symbols_extracted() {
+        let src = r#"
+pub fn process_order() {}
+struct Config { x: u32 }
+enum State { A, B }
+trait Runner { }
+impl Config { }
+pub mod sub { }
+const MAX: u32 = 5;
+"#;
+        let symbols = extract_symbols("lib.rs", src);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"process_order"));
+        assert!(names.contains(&"Config"));
+        assert!(names.contains(&"State"));
+        assert!(names.contains(&"Runner"));
+        assert!(names.contains(&"MAX"));
+    }
+
+    #[test]
+    fn go_and_python_symbols() {
+        let go = "func (s *Server) Handle() {}\ntype Repo struct {}\nfunc Run() {}";
+        let g: Vec<String> = extract_symbols("a.go", go).iter().map(|s| s.name.clone()).collect();
+        assert!(g.contains(&"Handle".to_string()));
+        assert!(g.contains(&"Repo".to_string()));
+        assert!(g.contains(&"Run".to_string()));
+
+        let py = "def train():\nclass Model:";
+        let p: Vec<String> = extract_symbols("a.py", py).iter().map(|s| s.name.clone()).collect();
+        assert!(p.contains(&"train".to_string()));
+        assert!(p.contains(&"Model".to_string()));
+    }
+
+    #[test]
+    fn query_matches_and_ranks_exact_first() {
+        let mut g = CodeGraph::new(Path::new("."));
+        g.nodes.push(GraphNode {
+            id: "a::helper".into(),
+            name: "helper".into(),
+            kind: "fn".into(),
+            file: "a.rs".into(),
+            start_line: 1,
+            end_line: 1,
+            callers: vec![],
+            callees: vec![],
+        });
+        g.nodes.push(GraphNode {
+            id: "b::helper_utils".into(),
+            name: "helper_utils".into(),
+            kind: "fn".into(),
+            file: "b.rs".into(),
+            start_line: 1,
+            end_line: 1,
+            callers: vec![],
+            callees: vec![],
+        });
+        let res = g.query("helper").unwrap();
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].name, "helper", "exact match should rank first");
+    }
+
+    #[test]
+    fn impact_finds_dependents_bfs() {
+        let mut g = CodeGraph::new(Path::new("."));
+        for name in ["core", "mid", "top"] {
+            g.nodes.push(GraphNode {
+                id: format!("f::{}", name),
+                name: name.into(),
+                kind: "fn".into(),
+                file: "f.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                callers: vec![],
+                callees: vec![],
+            });
+        }
+        // top -> mid -> core  (core is depended on by mid, which is by top)
+        g.edges.push(GraphEdge { from: "f::top".into(), to: "f::mid".into(), kind: "calls".into() });
+        g.edges.push(GraphEdge { from: "f::mid".into(), to: "f::core".into(), kind: "calls".into() });
+
+        let impact = g.get_impact_analysis("f::core");
+        let names: Vec<&str> = impact.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(names.contains(&"f::mid"));
+        assert!(names.contains(&"f::top"));
+        // mid (depth 1) should come before top (depth 2).
+        assert_eq!(impact[0].0, "f::mid");
+    }
+
+    #[test]
+    fn export_import_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("graph-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut g = CodeGraph::new(Path::new("/proj"));
+        g.nodes.push(GraphNode {
+            id: "x".into(),
+            name: "x".into(),
+            kind: "fn".into(),
+            file: "x.rs".into(),
+            start_line: 1,
+            end_line: 2,
+            callers: vec![],
+            callees: vec![],
+        });
+        let p = dir.join("g.json");
+        g.export(&p).unwrap();
+        let mut g2 = CodeGraph::new(Path::new("."));
+        g2.import(&p).unwrap();
+        assert_eq!(g2.nodes.len(), 1);
+        assert_eq!(g2.nodes[0].name, "x");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
