@@ -18,4 +18,5 @@ pub mod secrets;
 pub mod session;
 pub mod trust;
 pub mod tools;
+pub mod rollback;
 pub mod ui;
