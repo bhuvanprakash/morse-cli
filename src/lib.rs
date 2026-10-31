@@ -3,6 +3,7 @@ pub mod vcs;
 pub mod verify;
 pub mod context;
 pub mod ccache;
+pub mod checkpoint;
 pub mod config;
 pub mod cost;
 pub mod db;
