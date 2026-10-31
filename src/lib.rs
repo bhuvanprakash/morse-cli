@@ -7,6 +7,7 @@ pub mod errors;
 pub mod memory;
 pub mod permissions;
 pub mod providers;
+pub mod rag;
 pub mod secrets;
 pub mod session;
 pub mod trust;
