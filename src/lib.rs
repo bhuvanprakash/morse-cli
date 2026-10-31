@@ -12,6 +12,7 @@ pub mod errors;
 pub mod graph;
 pub mod health;
 pub mod memory;
+pub mod observability;
 pub mod permissions;
 pub mod providers;
 pub mod rag;
