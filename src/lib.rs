@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod verify;
 pub mod context;
 pub mod ccache;
 pub mod config;
