@@ -2,6 +2,7 @@ pub mod config;
 pub mod cost;
 pub mod db;
 pub mod errors;
+pub mod memory;
 pub mod permissions;
 pub mod providers;
 pub mod secrets;
