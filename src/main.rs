@@ -390,3 +390,291 @@ fn print_welcome(ui: &UI, cfg: &config::Config) {
         ui.print(&ui.bullet("export GROQ_API_KEY=…   (free at console.groq.com)", 0));
     }
 }
+
+async fn execute_command(
+    ui: &UI,
+    cfg: &config::Config,
+    command: Commands,
+    prompt: Option<&str>,
+    yolo: bool,
+) -> Result<()> {
+    match command {
+        Commands::Init { path } => {
+            if console::user_attended() {
+                config::init_interactive(ui, path.as_deref())?;
+            } else {
+                config::init(path.as_deref())?;
+                ui.print(&ui.success("Project initialized (run 'morse init' in a terminal for setup wizard)"));
+            }
+        }
+        Commands::TrustInit => {
+            trust::init(ui, cfg)?;
+            ui.print(&ui.success("Trust configuration initialized"));
+        }
+        Commands::TrustStatus => {
+            trust::status(ui, cfg)?;
+        }
+        Commands::TrustCheck { path } => {
+            trust::check(ui, cfg, &path)?;
+        }
+        Commands::Check { path } => {
+            trust::check(ui, cfg, &path)?;
+        }
+        Commands::GraphBuild => {
+            let _spinner = ui.spinner("Building code graph...");
+            graph::build(cfg)?;
+            ui.print(&ui.success("Code graph built"));
+        }
+        Commands::GraphQuery { q } => {
+            graph::query(cfg, &q)?;
+        }
+        Commands::GraphImpact { symbol } => {
+            graph::impact(cfg, &symbol)?;
+        }
+        Commands::GraphVisualize => {
+            graph::visualize(cfg)?;
+        }
+        Commands::RAGInit => {
+            let _spinner = ui.spinner("Initializing RAG index...");
+            rag::init(cfg)?;
+            ui.print(&ui.success("RAG index initialized"));
+        }
+        Commands::RAGSearch { q } => {
+            rag::search(cfg, &q)?;
+        }
+        Commands::Swarm { task } => {
+            let _spinner = ui.spinner(&format!("Running swarm: {}", task));
+            swarm::run(cfg, &task).await?;
+            ui.print(&ui.success("Swarm execution complete"));
+        }
+        Commands::CloudRun { code } => {
+            let _spinner = ui.spinner("Executing in cloud...");
+            cloud::run(cfg, &code)?;
+        }
+        Commands::CloudStatus => {
+            cloud::status(cfg)?;
+        }
+        Commands::CloudConfig => {
+            cloud::config(cfg)?;
+        }
+        Commands::Doctor => {
+            health::doctor(cfg)?;
+        }
+        Commands::Health => {
+            health::run(cfg)?;
+        }
+        Commands::Cost => {
+            cost::run(cfg)?;
+        }
+        Commands::Limit => {
+            ratelimit::run(cfg)?;
+        }
+        Commands::Backup { action } => {
+            let joined = join_args(&action);
+            backup::run(cfg, joined.as_deref())?;
+        }
+        Commands::Secrets { action } => {
+            let joined = join_args(&action);
+            secrets::run(cfg, joined.as_deref())?;
+        }
+        Commands::Modes => {
+            modes::run(cfg)?;
+        }
+        Commands::Completion { shell } => {
+            cli_completion(shell.as_deref(), ui)?;
+        }
+        Commands::Docs { format } => {
+            docs_generate(format.as_deref())?;
+        }
+        Commands::Tutorial => {
+            tui::tutorial()?;
+        }
+        Commands::Chat { message } => {
+            let msg = message.as_deref().or(prompt);
+            if let Some(prompt_text) = msg {
+                providers::complete_text_streaming(cfg, prompt_text).await?;
+            } else {
+                tui::async_chat(cfg, None).await?;
+            }
+        }
+        Commands::Ask { question } => {
+            providers::complete_text_streaming(cfg, &question).await?;
+        }
+        Commands::Agent { task } => {
+            agent::run(ui, cfg, &task, yolo).await?;
+        }
+        Commands::Models { refresh } => {
+            providers::print_models(ui, cfg);
+            if refresh {
+                println!("\nRefreshing live model lists…");
+                for provider in ["groq", "openai", "anthropic", "deepseek", "mistral"] {
+                    let key = cfg.get_provider_key(provider).map(|s| s.to_string());
+                    let Some(key) = key else { continue };
+                    let models = providers::cached_models(provider, Some(&key), true).await;
+                    println!("  {}: {} models", provider, models.len());
+                }
+                println!("Done — lists cached for 6h.");
+            }
+        }
+        Commands::Edit { path } => {
+            open_in_editor(&path)?;
+            ui.print(&ui.success(&format!("Opened {} in editor", path.display())));
+        }
+        Commands::Fix { error } => {
+            let _spinner = ui.spinner("Analyzing error...");
+            providers::fix_error(cfg, &error).await?;
+            ui.print(&ui.success("Error analysis complete"));
+        }        Commands::Review => {
+            let _spinner = ui.spinner("Reviewing code...");
+            providers::review_code(cfg).await?;
+            ui.print(&ui.success("Code review complete"));
+        }
+        Commands::Commit => {
+            let _spinner = ui.spinner("Generating commit message...");
+            providers::generate_commit(cfg).await?;
+            ui.print(&ui.success("Commit message generated"));
+        }
+        Commands::Explain { target } => {
+            providers::explain(cfg, &target).await?;
+        }
+        Commands::Ralph { task } => {
+            let _spinner = ui.spinner(&format!("Ralph: {}", task));
+            swarm::ralph(cfg, &task).await?;
+            ui.print(&ui.success("Ralph verification complete"));
+        }
+        Commands::MCP { action } => {
+            let joined = join_args(&action);
+            mcp::run(cfg, joined.as_deref())?;
+        }
+        Commands::LSP => {
+            lsp::run(cfg)?;
+        }
+        Commands::AutoApproval => {
+            auto_approval::run(cfg)?;
+        }
+        Commands::Skills => {
+            skills::run(cfg)?;
+        }
+        Commands::Sessions { action } => {
+            let joined = join_args(&action);
+            session::run(cfg, joined.as_deref())?;
+        }
+        Commands::Memory { action } => {
+            let joined = join_args(&action);
+            memory::run(cfg, joined.as_deref())?;
+        }
+        Commands::Daemon => {
+            daemon::run(cfg)?;
+            ui.print(&ui.success("Daemon started"));
+        }
+        Commands::DaemonStop => {
+            daemon::stop_daemon(cfg)?;
+            ui.print(&ui.success("Daemon stopped"));
+        }
+        Commands::DaemonStatus => {
+            daemon::daemon_status(cfg)?;
+        }
+        Commands::Serve { transport } => {
+            serve::run(cfg, transport.as_deref())?;
+        }
+        Commands::Checkpoint { action } => {
+            let joined = join_args(&action);
+            checkpoint::run(cfg, joined.as_deref())?;
+        }
+        Commands::Rollback { target } => {
+            rollback::run(cfg, target.as_deref())?;
+        }
+        Commands::NativeMac => {
+            native_mac::run(cfg)?;
+        }
+        Commands::Z3Verify { property } => {
+            z3_verify::run(cfg, property.as_deref())?;
+        }
+        Commands::Slash { command } => {
+            slash_commands::run(cfg, command.as_deref())?;
+        }
+        Commands::Diff => {
+            vcs::run_diff(cfg)?;
+        }
+        Commands::Undo => {
+            vcs::run_undo(cfg, true)?;
+        }
+        Commands::GitStatus => {
+            vcs::run_status(cfg)?;
+        }
+        Commands::GitLog { n } => {
+            vcs::run_log(cfg, n)?;
+        }
+        Commands::Verify { which } => {
+            verify::run(cfg, which.as_deref())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Join trailing var-args into a single command string (empty -> None).
+fn join_args(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        None
+    } else {
+        Some(args.join(" "))
+    }
+}
+
+/// Open a file in the user's preferred editor ($EDITOR / $VISUAL), falling
+/// back to common editors.
+fn open_in_editor(path: &std::path::Path) -> Result<()> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            for candidate in ["nano", "vim", "vi", "code"] {
+                if std::process::Command::new("which")
+                    .arg(candidate)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    return candidate.to_string();
+                }
+            }
+            "nano".to_string()
+        });
+    let status = std::process::Command::new(&editor).arg(path).status()?;
+    if !status.success() {
+        anyhow::bail!("editor '{}' exited with {}", editor, status);
+    }
+    Ok(())
+}
+
+fn cli_completion(shell: Option<&str>, ui: &UI) -> Result<()> {
+    let shell = shell.unwrap_or("bash");
+    let mut cmd = Cli::command();
+    match shell {
+        "bash" => clap_complete::generate(clap_complete::Shell::Bash, &mut cmd, "morse", &mut io::stdout()),
+        "zsh" => clap_complete::generate(clap_complete::Shell::Zsh, &mut cmd, "morse", &mut io::stdout()),
+        "fish" => clap_complete::generate(clap_complete::Shell::Fish, &mut cmd, "morse", &mut io::stdout()),
+        "powershell" => clap_complete::generate(clap_complete::Shell::PowerShell, &mut cmd, "morse", &mut io::stdout()),
+        _ => {
+            ui.print(&ui.error(&format!("Unsupported shell: {}", shell)));
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+fn docs_generate(format: Option<&str>) -> Result<()> {
+    let fmt = format.unwrap_or("markdown");
+    match fmt {
+        "markdown" => {
+            println!("# Morse CLI Documentation\n\nSee README.md");
+        }
+        "man" => {
+            println!(".SH NAME\nmorse \\- AI coding assistant");
+        }
+        _ => {
+            println!("Unsupported format: {}", fmt);
+        }
+    }
+    Ok(())
+}
