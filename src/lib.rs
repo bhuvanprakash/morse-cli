@@ -12,6 +12,7 @@ pub mod db;
 pub mod errors;
 pub mod graph;
 pub mod health;
+pub mod lsp;
 pub mod memory;
 pub mod observability;
 pub mod permissions;
