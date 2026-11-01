@@ -15,6 +15,7 @@ pub mod health;
 pub mod lsp;
 pub mod memory;
 pub mod mcp;
+pub mod modes;
 pub mod observability;
 pub mod permissions;
 pub mod providers;
