@@ -22,6 +22,7 @@ pub mod rag;
 pub mod secrets;
 pub mod serve;
 pub mod session;
+pub mod skills;
 pub mod trust;
 pub mod tools;
 pub mod ratelimit;
