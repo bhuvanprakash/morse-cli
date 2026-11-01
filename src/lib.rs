@@ -33,5 +33,6 @@ pub mod tools;
 pub mod provenance;
 pub mod cloud;
 pub mod ratelimit;
+pub mod model_resolver;
 pub mod rollback;
 pub mod ui;
