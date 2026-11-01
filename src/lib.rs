@@ -28,6 +28,7 @@ pub mod session;
 pub mod skills;
 pub mod slash_commands;
 pub mod swarm;
+pub mod tui;
 pub mod trust;
 pub mod tools;
 pub mod provenance;
