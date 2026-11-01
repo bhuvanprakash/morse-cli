@@ -38,7 +38,6 @@ go.mod
 go.sum
 main.go
 install.sh
-README.md
 LICENSE
 ARCHITECTURE.md
 CHANGELOG.md
