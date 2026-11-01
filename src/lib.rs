@@ -31,6 +31,7 @@ pub mod swarm;
 pub mod trust;
 pub mod tools;
 pub mod provenance;
+pub mod cloud;
 pub mod ratelimit;
 pub mod rollback;
 pub mod ui;
