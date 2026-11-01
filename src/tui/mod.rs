@@ -810,3 +810,887 @@ async fn run_loop<B: Backend + Send>(
     }
     Ok(())
 }
+
+/// Refresh the palette from the current input. Slash palette while typing a
+/// bare command; file palette while typing an @path.
+fn update_palette(state: &mut ChatState) {
+    let root = std::env::current_dir().unwrap_or_default();
+    let input = state.input.clone();
+
+    state.palette = if input.starts_with('/') && !input.contains(' ') {
+        // If the input is already an exact command, let Enter execute it —
+        // no palette in the way (e.g. "/model" should run, not select "/models").
+        let exact = SLASH_INFO
+            .iter()
+            .any(|(cmd, _)| cmd.split_whitespace().next() == Some(input.as_str()));
+        if exact {
+            None
+        } else {
+            let matches: Vec<(String, String, String)> = SLASH_INFO
+                .iter()
+                .filter(|(cmd, _)| cmd.starts_with(&input))
+                .map(|(label, desc)| {
+                    let insert = label.split_whitespace().next().unwrap_or(label).to_string();
+                    (insert, label.to_string(), desc.to_string())
+                })
+                .collect();
+            if matches.is_empty() {
+                None
+            } else {
+                Some(Palette { kind: PaletteKind::Slash, items: matches, selected: 0 })
+            }
+        }
+    } else if trailing_at_token(&input).is_some() {
+        match complete_at(&input, &root, 9) {
+            Some((_, cands)) => {
+                let items: Vec<(String, String, String)> = cands
+                    .into_iter()
+                    .map(|c| {
+                        let desc = if c.ends_with('/') {
+                            "directory — Tab to descend".to_string()
+                        } else {
+                            "Tab to insert".to_string()
+                        };
+                        (c.clone(), c, desc)
+                    })
+                    .collect();
+                if items.is_empty() {
+                    None
+                } else {
+                    Some(Palette { kind: PaletteKind::AtFile, items, selected: 0 })
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+}
+
+/// Apply the palette's selected item to the input line.
+fn accept_palette(state: &mut ChatState) {
+    let Some(palette) = state.palette.clone() else { return };
+    let Some((insert, _, _)) = palette.items.get(palette.selected) else { return };
+    let insert = insert.clone();
+    match palette.kind {
+        PaletteKind::Slash => {
+            state.input = format!("{} ", insert);
+        }
+        PaletteKind::AtFile => {
+            if let Some((at_idx, partial)) = trailing_at_token(&state.input) {
+                let head = state.input[..at_idx + 1].to_string();
+                let tail = state.input[at_idx + 1 + partial.len()..].to_string();
+                let sep = if insert.ends_with('/') { "" } else { " " };
+                state.input = format!("{}{}{}{}", head, insert, sep, tail);
+            }
+        }
+    }
+    state.palette = None;
+    state.dirty = true;
+}
+
+fn palette_up(state: &mut ChatState) {
+    if let Some(p) = state.palette.as_mut() {
+        p.selected = p.selected.saturating_sub(1);
+        state.dirty = true;
+    }
+}
+
+fn palette_down(state: &mut ChatState) {
+    if let Some(p) = state.palette.as_mut() {
+        if p.selected + 1 < p.items.len() {
+            p.selected += 1;
+            state.dirty = true;
+        }
+    }
+}
+
+fn pop_word(s: &mut String) {
+    while s.ends_with(' ') {
+        s.pop();
+    }
+    if let Some(idx) = s.rfind(' ') {
+        s.truncate(idx);
+    } else {
+        s.clear();
+    }
+}
+
+
+/// Human label for a slash command (used in error messages).
+fn cmd_name(input: &str) -> String {
+    input.split_whitespace().next().unwrap_or(input).to_string()
+}
+
+/// Non-blocking check for a cancel key (Esc or Ctrl+C) while a generation is
+/// streaming. Consumes the event so it doesn't leak into the main loop.
+fn cancel_pressed() -> bool {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    while let Ok(true) = event::poll(std::time::Duration::from_millis(0)) {
+        if let Ok(Event::Key(k)) = event::read() {
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            if k.code == KeyCode::Esc {
+                return true;
+            }
+            if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && k.code == KeyCode::Char('c')
+            {
+                return true;
+            }
+            // Ignore other queued keys during streaming.
+        }
+    }
+    false
+}
+
+/// Copy text to the system clipboard (macOS/Linux; best-effort).
+fn copy_to_clipboard(text: &str) -> bool {
+    let cmds: &[(&str, &[&str])] = &[
+        ("pbcopy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("wl-copy", &[]),
+    ];
+    for (cmd, args) in cmds {
+        let child = std::process::Command::new(*cmd)
+            .args(*args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(stdin) = child.stdin.as_mut() {
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(child.stdin.take());
+                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    false
+}
+
+/// Returns true if the slash command was handled (so caller skips model call).
+fn handle_slash(state: &mut ChatState, input: &str, cfg: &Config) -> bool {
+    let mut parts = input.splitn(2, ' ');
+    let cmd = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+    match cmd {
+        "/help" => {
+            state.push(
+                Role::System,
+                "COMMANDS\n  /add <file>       keep a file in every request\n  /drop <file>       remove from context\n  /ls                files in context\n  /run <cmd>         run shell; output joins next message\n  /graph <q>         search the code graph\n  /rag <q>           semantic code search\n  /memory …          add/get/search persistent notes\n  /mcp               external MCP tools\n  /commit            AI commit message from changes\n  /undo · /diff      git in-chat\n\nSESSION\n  /save [name]       save this conversation\n  /resume            list saved conversations\n  /export [file]     transcript → markdown\n\nMODEL & MISC\n  /models · /model   switch model\n  /cache            toggle/clear the response cache\n  /copy · /tokens · /cost · /retry · /compact\n  /clear (chat) · /reset (chat + context) · /exit\n\nINPUT\n  / or @             live palette · Tab accepts\n  ↑ / ↓              navigate palette, then history\n  Esc                dismiss palette · normal mode\n  Ctrl+U / Ctrl+W    clear line / delete word\n  Esc (streaming)    cancel generation",
+            );
+            true
+        }
+        "/add" => {
+            if arg.is_empty() {
+                state.push(Role::System, format!("Usage: /add <file>  (in context: {})", state.context_files.len()));
+            } else {
+                let root = std::env::current_dir().unwrap_or_default();
+                let p = std::path::PathBuf::from(arg);
+                let full = if p.is_absolute() { p } else { root.join(&p) };
+                if !full.is_file() {
+                    state.push(Role::Error, format!("/add: no such file: {}", arg));
+                } else if state.context_files.iter().any(|f| f == arg) {
+                    state.push(Role::System, format!("Already in context: {}", arg));
+                } else {
+                    state.context_files.push(arg.to_string());
+                    state.push(Role::System, format!("Added to context: {} (now {} file(s))", arg, state.context_files.len()));
+                }
+            }
+            true
+        }
+        "/drop" => {
+            if let Some(pos) = state.context_files.iter().position(|f| f == arg) {
+                state.context_files.remove(pos);
+                state.push(Role::System, format!("Removed from context: {}", arg));
+            } else {
+                state.push(Role::System, format!("Not in context: {} (use /ls)", arg));
+            }
+            true
+        }
+        "/ls" => {
+            if state.context_files.is_empty() {
+                state.push(Role::System, "No files in context. Add with /add <file> or @path per message.".to_string());
+            } else {
+                let mut lines = vec![format!("Files in context ({}):", state.context_files.len())];
+                for f in &state.context_files {
+                    lines.push(format!("  {}", f));
+                }
+                state.push(Role::System, lines.join("\n"));
+            }
+            true
+        }
+        "/run" => {
+            if arg.is_empty() {
+                state.push(Role::System, "Usage: /run <command> — output joins your next message".to_string());
+            } else {
+                state.push(Role::User, format!("$ {}", arg));
+                let output = std::process::Command::new("sh").arg("-c").arg(arg).output();
+                match output {
+                    Ok(o) => {
+                        let mut text = String::from_utf8_lossy(&o.stdout).to_string();
+                        let err = String::from_utf8_lossy(&o.stderr).to_string();
+                        if !err.is_empty() {
+                            if !text.is_empty() { text.push('\n'); }
+                            text.push_str(&err);
+                        }
+                        let status = if o.status.success() { "ok" } else { "non-zero exit" };
+                        let truncated: String = text.chars().take(4000).collect();
+                        state.pending_context.push(format!(
+                            "Output of `{}` ({}):\n```\n{}\n```",
+                            arg, status, truncated
+                        ));
+                        state.push(Role::System, format!("Captured output ({} bytes) — it will be attached to your next message.", truncated.len()));
+                    }
+                    Err(e) => state.push(Role::Error, format!("/run failed: {}", e)),
+                }
+            }
+            true
+        }
+        "/undo" => {
+            let cfg2 = Config::default();
+            match crate::rollback::rollback_last_change(&cfg2) {
+                Ok(msg) => state.push(Role::System, format!("undo: {}", msg)),
+                Err(e) => state.push(Role::Error, format!("undo failed: {}", e)),
+            }
+            true
+        }
+        "/diff" => {
+            let root = std::env::current_dir().unwrap_or_default();
+            match crate::vcs::diff(&root, false) {
+                Ok(d) if d.trim().is_empty() => state.push(Role::System, "No uncommitted changes.".to_string()),
+                Ok(d) => {
+                    let shown: String = d.chars().take(4000).collect();
+                    state.push(Role::System, format!("Working-tree diff:\n```\n{}\n```", shown));
+                }
+                Err(e) => state.push(Role::Error, format!("diff failed: {}", e)),
+            }
+            true
+        }
+        "/copy" => {
+            let last = state.messages.iter().rev().find(|m| m.role == Role::Assistant);
+            match last {
+                Some(m) if !m.content.is_empty() => {
+                    let copied = copy_to_clipboard(&m.content);
+                    if copied {
+                        state.push(Role::System, "Last response copied to clipboard.".to_string());
+                    } else {
+                        state.push(Role::Error, "No clipboard tool found (pbcopy/xclip/wl-copy).".to_string());
+                    }
+                }
+                _ => state.push(Role::System, "No assistant response to copy yet.".to_string()),
+            }
+            true
+        }
+        "/tokens" => {
+            let total_chars: usize = state.messages.iter().map(|m| m.content.len()).sum();
+            let est = total_chars / 4;
+            let ctx_files: usize = state.context_files.len();
+            state.push(Role::System, format!(
+                "~{}k tokens in transcript ({} msgs) + {} file(s) in context.\nGauge in the status bar shows the 128k budget.",
+                est / 1000,
+                state.messages.len(),
+                ctx_files
+            ));
+            true
+        }
+        "/save" => {
+            let name = if arg.is_empty() { None } else { Some(arg.to_string()) };
+            match save_session_named(state, name) {
+                Ok(msg) => state.push(Role::System, msg),
+                Err(e) => state.push(Role::Error, format!("/save failed: {}", e)),
+            }
+            true
+        }
+        "/resume" => {
+            match crate::session::SessionStore::new() {
+                Ok(store) => {
+                    let sessions = store.scan_disk();
+                    if sessions.is_empty() {
+                        state.push(Role::System, "No saved conversations yet.".to_string());
+                    } else {
+                        let mut lines = vec!["Saved conversations (newest first):".to_string()];
+                        for s in sessions.iter().take(8) {
+                            let when = s.updated_at.format("%m-%d %H:%M");
+                            lines.push(format!(
+                                "  {}  {:<24} {} msgs  {}",
+                                &s.id[..8.min(s.id.len())],
+                                s.name,
+                                s.messages.len(),
+                                when
+                            ));
+                        }
+                        lines.push("Open in a new session: morse sessions resume <id>".to_string());
+                        state.push(Role::System, lines.join("\n"));
+                    }
+                }
+                Err(e) => state.push(Role::Error, format!("/resume failed: {}", e)),
+            }
+            true
+        }
+        "/graph" => {
+            if arg.is_empty() {
+                state.push(Role::System, "Usage: /graph <symbol or query>".to_string());
+            } else {
+                let root = std::env::current_dir().unwrap_or_default();
+                let mut g = crate::graph::CodeGraph::new(&root);
+                let gp = root.join(".morse").join("graph.json");
+                let loaded = if gp.exists() { g.import(&gp).is_ok() && !g.get_all_symbols().is_empty() } else { false };
+                if !loaded {
+                    state.push(Role::System, "Building graph first (one moment)…".to_string());
+                    if g.build().is_err() {
+                        state.push(Role::Error, "/graph: failed to build".to_string());
+                        return true;
+                    }
+                    let _ = g.export(&gp);
+                }
+                let results = g.query(arg).unwrap_or_default();
+                if results.is_empty() {
+                    state.push(Role::System, format!("No graph matches for '{}'", arg));
+                } else {
+                    let mut lines = vec![format!("Graph matches for '{}':", arg)];
+                    for n in results.iter().take(6) {
+                        lines.push(format!(
+                            "  {} ({}) — {}:{}  callers={} callees={}",
+                            n.name, n.kind, n.file, n.start_line, n.callers.len(), n.callees.len()
+                        ));
+                    }
+                    state.push(Role::System, lines.join("\n"));
+                }
+            }
+            true
+        }
+        "/rag" => {
+            if arg.is_empty() {
+                state.push(Role::System, "Usage: /rag <query>".to_string());
+            } else {
+                let root = std::env::current_dir().unwrap_or_default();
+                let path = crate::rag::index_path(&root);
+                match crate::rag::RagIndex::load(&path) {
+                    Ok(index) if !index.is_empty() => {
+                        let hits = index.search(arg, 5);
+                        if hits.is_empty() {
+                            state.push(Role::System, format!("No RAG matches for '{}'", arg));
+                        } else {
+                            let mut lines = vec![format!("Top matches for '{}':", arg)];
+                            for (doc, score) in hits {
+                                let file = doc.metadata["file"].as_str().unwrap_or("?");
+                                let start = doc.metadata["start_line"].as_u64().unwrap_or(0);
+                                lines.push(format!("  {:.3}  {}:{}  ({})", score, file, start, doc.id));
+                            }
+                            state.push(Role::System, lines.join("\n"));
+                        }
+                    }
+                    _ => state.push(Role::System, "No RAG index yet — run 'morse rag-init' in your shell first.".to_string()),
+                }
+            }
+            true
+        }
+        "/memory" => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            match crate::memory::MemoryStore::load_default() {
+                Ok(mut store) => match parts.first().copied().unwrap_or("list") {
+                    "add" | "set" if parts.len() >= 3 => {
+                        let key = parts[1].to_string();
+                        let value = parts[2..].join(" ");
+                        match store.store(key.clone(), value) {
+                            Ok(_) => state.push(Role::System, format!("Remembered: {} = {}", key, store.retrieve(&key).unwrap_or(&String::new()))),
+                            Err(e) => state.push(Role::Error, format!("/memory: {}", e)),
+                        }
+                    }
+                    "get" if parts.len() >= 2 => {
+                        match store.retrieve(parts[1]) {
+                            Some(v) => state.push(Role::System, format!("{} = {}", parts[1], v)),
+                            None => state.push(Role::System, format!("No memory for '{}'", parts[1])),
+                        }
+                    }
+                    "search" if !parts.is_empty() => {
+                        let q = parts[1..].join(" ");
+                        let hits = store.search(&q);
+                        if hits.is_empty() {
+                            state.push(Role::System, format!("No memories match '{}'", q));
+                        } else {
+                            let lines: Vec<String> = hits.iter().take(6).map(|e| format!("  {} = {}", e.key, e.value)).collect();
+                            state.push(Role::System, format!("Memories matching '{}':\n{}", q, lines.join("\n")));
+                        }
+                    }
+                    _ => {
+                        let entries = store.list();
+                        if entries.is_empty() {
+                            state.push(Role::System, "Memory is empty. /memory add <key> <value>".to_string());
+                        } else {
+                            let lines: Vec<String> = entries.iter().take(8).map(|e| format!("  {} = {}", e.key, e.value)).collect();
+                            state.push(Role::System, format!("Memories:\n{}", lines.join("\n")));
+                        }
+                    }
+                },
+                Err(e) => state.push(Role::Error, format!("/memory: {}", e)),
+            }
+            true
+        }
+        "/export" => {
+            let path = match arg.is_empty() {
+                true => {
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    std::env::current_dir().unwrap_or_default().join(format!(".morse/chat-{}.md", ts))
+                }
+                false => std::path::PathBuf::from(arg),
+            };
+            let mut md = format!("# Morse chat — {}\n\n", chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"));
+            for m in &state.messages {
+                let who = match m.role {
+                    Role::User => "You",
+                    Role::Assistant => "Morse",
+                    Role::System => "System",
+                    Role::Error => "Error",
+                };
+                md.push_str(&format!("**{}**: {}\n\n", who, m.content));
+            }
+            match std::fs::write(&path, md) {
+                Ok(_) => state.push(Role::System, format!("Transcript exported to {}", path.display())),
+                Err(e) => state.push(Role::Error, format!("/export failed: {}", e)),
+            }
+            true
+        }
+        "/reset" => {
+            state.messages.clear();
+            state.context_files.clear();
+            state.pending_context.clear();
+            state.push(Role::System, "Transcript and context files cleared.".to_string());
+            true
+        }
+        "/cache" => {
+            let cache = crate::ccache::CompletionCache::new(cfg);
+            match arg {
+                "off" | "disable" => {
+                    let _ = cache.set_enabled(false);
+                    state.push(Role::System, "Completion cache disabled — every ask hits the provider.".to_string());
+                }
+                "on" | "enable" => {
+                    let _ = cache.set_enabled(true);
+                    state.push(Role::System, "Completion cache enabled — identical asks answer instantly ⚡".to_string());
+                }
+                "clear" => match cache.clear() {
+                    Ok(n) => state.push(Role::System, format!("Cleared {} cached response(s).", n)),
+                    Err(e) => state.push(Role::Error, format!("/cache clear failed: {}", e)),
+                },
+                _ => {
+                    let (enabled, hits, misses, writes) = cache.stats();
+                    let rate = if hits + misses > 0 {
+                        format!("{:.0}%", hits as f64 / (hits + misses) as f64 * 100.0)
+                    } else {
+                        "—".to_string()
+                    };
+                    state.push(Role::System, format!(
+                        "Completion cache: {}\n  hits {} · misses {} · writes {} · hit rate {}\n\n/cache off · /cache on · /cache clear\nIdentical asks (same model+prompt) answer instantly ⚡",
+                        if enabled { "ON" } else { "OFF" },
+                        hits, misses, writes, rate
+                    ));
+                }
+            }
+            true
+        }
+        "/models" => {
+            // Configured providers + defaults, plus cached live list sizes.
+            let mut lines = vec![format!("Current: {}", state.model_label), String::new()];
+            for provider in ["groq", "openai", "anthropic", "gemini", "deepseek", "ollama"] {
+                if cfg.get_provider_key(provider).is_some() || provider == "ollama" {
+                    let model = crate::providers::default_model_for_pub(cfg, provider);
+                    lines.push(format!("  /model {}/{}", provider, model));
+                }
+            }
+            lines.push(String::new());
+            lines.push("Live model lists: /model (cached 6h) — refresh: 'morse models --refresh'".into());
+            state.push(Role::System, lines.join("\n"));
+            true
+        }
+        "/model" => {
+            if arg.is_empty() {
+                state.push(Role::System, format!("Current model: {}", state.model_label));
+            } else {
+                state.model_label = arg.to_string();
+                state.push(Role::System, format!("Model switched to {}", arg));
+            }
+            true
+        }
+        "/clear" => {
+            state.messages.clear();
+            state.push(Role::System, "Transcript cleared.");
+            true
+        }
+        "/compact" => {
+            let before = state.messages.len();
+            let as_tuples: Vec<(String, String)> = state
+                .messages
+                .iter()
+                .filter(|m| !matches!(m.role, Role::System))
+                .map(|m| (m.role.as_str().to_string(), m.content.clone()))
+                .collect();
+            // Keep ~8k chars of the most recent context.
+            let trimmed = crate::context::trim_history(&as_tuples, 8_000);
+            let after = trimmed.len();
+            if after < before {
+                // Rebuild the transcript from the trimmed view.
+                let mut rebuilt: Vec<ChatMessage> = Vec::new();
+                for (role, content) in trimmed {
+                    let r = match role.as_str() {
+                        "user" => Role::User,
+                        "assistant" => Role::Assistant,
+                        "error" => Role::Error,
+                        _ => Role::System,
+                    };
+                    rebuilt.push(ChatMessage { role: r, content, meta: None });
+                }
+                state.messages = rebuilt;
+                state.push(
+                    Role::System,
+                    format!("Compacted: {} → {} messages (older turns trimmed).", before, after),
+                );
+            } else {
+                state.push(Role::System, "Nothing to compact — history already fits the budget.");
+            }
+            true
+        }
+        "/cost" => {
+            state.push(
+                Role::System,
+                "Costs depend on your provider. Groq & Ollama are free; OpenAI/Anthropic bill per token. Use 'morse cost' for tracked usage.",
+            );
+            true
+        }
+        "/exit" | "/quit" => {
+            state.push(Role::System, "Use Ctrl+C or type /exit then Enter.");
+            true
+        }
+        _ => {
+            state.push(Role::System, format!("Unknown command {}. Try /help.", cmd));
+            true
+        }
+    }
+}
+
+/// Non-streaming answer path (used for initial prompt).
+async fn answer(state: &mut ChatState, cfg: &Config, prompt: &str) {
+    let (provider, model) = resolve_with_fallback(cfg, &cfg.routing.quick_chat.clone());
+    let mut req = CompletionRequest::new(&model, prompt).with_system(&system_prompt());
+    req.messages = history_messages(state, prompt);
+    match provider.complete(req).await {
+        Ok(resp) => {
+            crate::cost::record_call(&resp.provider, &resp.model, resp.input_tokens as i64, resp.output_tokens as i64);
+            state.model_label = format!("{}/{}", resp.provider, resp.model);
+            state.push(Role::Assistant, resp.content);
+        }
+        Err(e) => state.push(Role::Error, e.display()),
+    }
+}
+
+/// Drop the last assistant/error response and re-generate it from the last
+/// user message.
+async fn retry_last<B: Backend + Send>(
+    terminal: &mut Terminal<B>,
+    state: &mut ChatState,
+    cfg: &Config,
+) -> Result<()> {
+    // Find the last user message index.
+    let Some(last_user) = state
+        .messages
+        .iter()
+        .rposition(|m| m.role == Role::User)
+    else {
+        state.push(Role::System, "Nothing to retry — send a message first.");
+        return Ok(());
+    };
+    let prompt = state.messages[last_user].content.clone();
+    // Truncate everything after the user's prompt (drops the old response).
+    state.messages.truncate(last_user + 1);
+    answer_streaming(terminal, state, cfg, &prompt).await
+}
+
+/// Streaming answer path with a live "typing" indicator.
+async fn answer_streaming<B: Backend + Send>(
+    terminal: &mut Terminal<B>,
+    state: &mut ChatState,
+    cfg: &Config,
+    prompt: &str,
+) -> Result<()> {
+    state.pending = true;
+
+    // Exact re-ask: if the user repeats the previous question, drop the stale
+    // (question, answer) pair so this request is byte-identical to the first
+    // one — the cache then hits, and the stale answer is replaced in place.
+    {
+        let n = state.messages.len();
+        if n >= 3 {
+            let same = {
+                let u_prev = &state.messages[n - 3];
+                let a_prev = &state.messages[n - 2];
+                let u_new = &state.messages[n - 1];
+                u_prev.role == Role::User
+                    && a_prev.role == Role::Assistant
+                    && u_new.role == Role::User
+                    && u_prev.content == u_new.content
+            };
+            if same {
+                state.messages.truncate(n - 2);
+            }
+        }
+    }
+
+    state.push(Role::Assistant, String::new());
+    terminal.draw(|f| render(f, state))?;
+
+    let history = history_messages(state, prompt);
+
+    // ── Completion cache: identical prompts answer instantly, for free. ──
+    let started = std::time::Instant::now();
+    let cache = crate::ccache::CompletionCache::new(cfg);
+    if cache.is_enabled() {
+        let sys = system_prompt();
+        let msgs = serde_json::to_string(&history).unwrap_or_default();
+        let key = crate::ccache::cache_key(&cfg.routing.default, &sys, &msgs, 0.7, 8192);
+        if let Ok(Some(entry)) = cache.get(&key) {
+            let content = entry.response["content"].as_str().unwrap_or("").to_string();
+            if !content.is_empty() {
+                state.pending = false;
+                state.pending_label.clear();
+                let slot = state.messages.last_mut().unwrap();
+                slot.content = content;
+                slot.meta = Some("~0s · cached ⚡".to_string());
+                state.model_label = format!("{}/{}", entry.provider, entry.model);
+                state.follow = true;
+                terminal.draw(|f| render(f, state))?;
+                return Ok(());
+            }
+        }
+    }
+
+    // The assistant reply slot, fixed for the whole fallback chain. System
+    // notices pushed during the chain land AFTER this index, so streaming
+    // always writes to the right bubble (regression: each retry re-captured
+    // `last` and replies landed in / destroyed system notices).
+    let msg_idx = state.messages.len() - 1;
+
+    // Try the cached working spec first (session memory OR the persisted one
+    // from a previous session — no repeated dead-provider round-trips);
+    // otherwise walk the fallback chain.
+    let chain: Vec<String> = match state
+        .working_spec
+        .clone()
+        .or_else(crate::providers::load_working_spec)
+    {
+        Some(spec) => vec![spec],
+        None => crate::providers::fallback_model_specs(cfg),
+    };
+
+    let mut last_err: Option<String> = None;
+    let mut outcome: Option<crate::providers::CompletionResponse> = None;
+    let mut used_spec: Option<String> = None;
+
+    for spec in &chain {
+        let (provider, model) = crate::providers::resolve_with_fallback(cfg, spec);
+        if provider.validate_key().await.is_err() {
+            continue;
+        }
+        // Live feedback: show which backend we're waiting on.
+        state.pending_label = format!("{} · {}", spec, model);
+        let _ = terminal.draw(|f| render(f, state));
+        let mut req = CompletionRequest::new(&model, prompt).with_system(&system_prompt());
+        req.messages = history.clone();
+        req.temperature = Some(0.7);
+
+        // Run the stream in a task and keep the UI responsive: chunks arrive
+        // over a channel (we redraw as they land) and Esc/Ctrl+C cancels a
+        // slow generation instead of freezing the TUI until it finishes.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let task = tokio::spawn(async move {
+            let res = provider.stream(req, &mut |chunk: String| {
+                let _ = tx.send(chunk);
+            })
+            .await;
+            res
+        });
+
+        let mut cancelled = false;
+        let result;
+        loop {
+            tokio::select! {
+                chunk = rx.recv() => {
+                    match chunk {
+                        Some(c) => {
+                            if let Some(m) = state.messages.get_mut(msg_idx) {
+                                m.content.push_str(&c);
+                            }
+                            let _ = terminal.draw(|f| render(f, state));
+                        }
+                        None => {
+                            // Channel closed: the task finished; collect result.
+                            result = match task.await {
+                                Ok(r) => r,
+                                Err(e) => Err(crate::errors::MorseError::new(
+                                    "TUI-TASK", &e.to_string(), crate::errors::ErrorCategory::Internal,
+                                )),
+                            };
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
+                    if cancel_pressed() {
+                        task.abort();
+                        cancelled = true;
+                        result = Err(crate::errors::MorseError::new(
+                            "TUI-CANCEL", "generation cancelled", crate::errors::ErrorCategory::Internal,
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if cancelled {
+            // Keep whatever streamed so far, marked as partial.
+            if let Some(m) = state.messages.get_mut(msg_idx) {
+                if !m.content.is_empty() {
+                    m.content.push_str("\n[cancelled]");
+                } else {
+                    m.content.push_str("[cancelled]");
+                }
+            }
+            state.pending = false;
+            state.pending_label.clear();
+            state.follow = true;
+            terminal.draw(|f| render(f, state))?;
+            return Ok(());
+        }
+
+        match result {
+            Ok(resp) => {
+                outcome = Some(resp);
+                used_spec = Some(spec.clone());
+                break;
+            }
+            Err(e) => {
+                // Discard any partial junk from the failed attempt so the next
+                // provider starts from a clean message slot.
+                if let Some(m) = state.messages.get_mut(msg_idx) {
+                    m.content.clear();
+                }
+                let detail: String = e.display().split_whitespace().collect::<Vec<_>>().join(" ");
+                let detail: String = detail.chars().take(110).collect();
+                state.push(Role::System, format!("{} unavailable — {}", spec, detail));
+                terminal.draw(|f| render(f, state))?;
+                last_err = Some(e.display());
+            }
+        }
+    }
+
+    state.pending = false;
+    state.pending_label.clear();
+    let slot = state
+        .messages
+        .get_mut(msg_idx)
+        .expect("assistant slot must exist");
+    match (outcome, used_spec) {
+        (Some(resp), Some(spec)) => {
+            crate::cost::record_call(&resp.provider, &resp.model, resp.input_tokens as i64, resp.output_tokens as i64);
+            // Store in the completion cache for instant, free re-runs.
+            let cache = crate::ccache::CompletionCache::new(cfg);
+            if cache.is_enabled() {
+                let sys = system_prompt();
+                let msgs = serde_json::to_string(&history).unwrap_or_default();
+                let key = crate::ccache::cache_key(&cfg.routing.default, &sys, &msgs, 0.7, 8192);
+                let payload = serde_json::json!({
+                    "content": resp.content,
+                    "provider": resp.provider,
+                    "model": resp.model,
+                });
+                let _ = cache.put(&key, &resp.provider, &resp.model, &payload);
+            }
+            let reply_len = resp.content.len();
+            if slot.content.is_empty() {
+                slot.content = resp.content;
+            }
+            let secs = started.elapsed().as_secs_f64();
+            let toks = resp.input_tokens + resp.output_tokens;
+            slot.meta = Some(format!(
+                "{:.1}s · {} tok · {}/{}",
+                secs,
+                if toks > 0 { toks.to_string() } else { format!("~{}", reply_len / 4) },
+                resp.provider,
+                resp.model
+            ));
+            state.model_label = format!("{}/{}", resp.provider, resp.model);
+            state.working_spec = Some(spec.clone());
+            crate::providers::save_working_spec(&spec);
+        }
+        _ => {
+            slot.content = format!(
+                "All providers failed. Last error: {}",
+                last_err.unwrap_or_else(|| "no provider configured".into())
+            );
+            slot.role = Role::Error;
+        }
+    }
+    // Pin to the newest message after a response arrives.
+    state.follow = true;
+
+    // Auto-compact: when the transcript approaches the context budget, trim
+    // older turns instead of letting requests start failing.
+    let total_chars: usize = state.messages.iter().map(|m| m.content.len()).sum();
+    const AUTO_COMPACT_THRESHOLD: usize = (128_000 * 4) * 85 / 100; // 85% of 128k tokens
+    if total_chars > AUTO_COMPACT_THRESHOLD {
+        let as_tuples: Vec<(String, String)> = state
+            .messages
+            .iter()
+            .filter(|m| m.role != Role::System)
+            .map(|m| (m.role.as_str().to_string(), m.content.clone()))
+            .collect();
+        let trimmed = crate::context::trim_history(&as_tuples, 8_000);
+        if trimmed.len() < as_tuples.len() {
+            let mut rebuilt: Vec<ChatMessage> = Vec::new();
+            for (role, content) in trimmed {
+                let r = match role.as_str() {
+                    "user" => Role::User,
+                    "assistant" => Role::Assistant,
+                    "error" => Role::Error,
+                    _ => Role::System,
+                };
+                rebuilt.push(ChatMessage { role: r, content, meta: None });
+            }
+            let before = as_tuples.len();
+            let after = trimmed.len();
+            state.messages = rebuilt;
+            state.push(
+                Role::System,
+                format!("Auto-compacted: {} → {} messages (context was near budget).", before, after),
+            );
+        }
+    }
+    terminal.draw(|f| render(f, state))?;
+    Ok(())
+}
+
+fn history_messages(state: &ChatState, latest: &str) -> Vec<Message> {
+    let mut out = Vec::new();
+    for m in &state.messages {
+        // Skip the just-pushed empty assistant placeholder and the duplicate
+        // user prompt we add manually below.
+        match m.role {
+            Role::User if m.content == latest => continue,
+            Role::Assistant if m.content.is_empty() => continue,
+            Role::User => out.push(Message::user(&m.content)),
+            Role::Assistant => out.push(Message::assistant(&m.content)),
+            Role::System | Role::Error => continue,
+        }
+    }
+    out.push(Message::user(latest));
+    out
+}
