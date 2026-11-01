@@ -37,3 +37,4 @@ pub mod model_resolver;
 pub mod native_mac;
 pub mod rollback;
 pub mod ui;
+pub mod z3_verify;
