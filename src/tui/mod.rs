@@ -1694,3 +1694,912 @@ fn history_messages(state: &ChatState, latest: &str) -> Vec<Message> {
     out.push(Message::user(latest));
     out
 }
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+fn render(f: &mut Frame, state: &mut ChatState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // header
+            Constraint::Min(3),    // transcript
+            Constraint::Length(3), // input
+            Constraint::Length(1), // status
+        ])
+        .split(f.size());
+
+    render_header(f, chunks[0], state);
+    render_transcript(f, chunks[1], state);
+    render_input(f, chunks[2], state);
+    render_palette(f, chunks[2], state);
+    render_status(f, chunks[3], state);
+}
+
+/// Floating suggestion popup anchored above the input box (Claude Code-style):
+/// ↑/↓ to move, Tab to accept, Esc to dismiss.
+fn render_palette(f: &mut Frame, input_area: Rect, state: &ChatState) {
+    let Some(palette) = &state.palette else { return };
+    let max_rows: u16 = 8;
+    let rows = (palette.items.len() as u16).min(max_rows);
+    let height = rows + 2; // borders
+    let width = input_area.width.saturating_sub(4).clamp(30, 64);
+    let y = input_area.y.saturating_sub(height).max(1);
+    let area = Rect {
+        x: input_area.x + 1,
+        y,
+        width,
+        height,
+    };
+
+    let title = match palette.kind {
+        PaletteKind::Slash => " commands · Tab accept · Esc dismiss ",
+        PaletteKind::AtFile => " files · Tab accept · Esc dismiss ",
+    };
+
+    let items: Vec<ListItem> = palette
+        .items
+        .iter()
+        .take(max_rows as usize)
+        .map(|(_, label, desc)| {
+            let mut spans = vec![Span::styled(
+                label.clone(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )];
+            if !desc.is_empty() {
+                spans.push(Span::styled(
+                    format!("  — {}", desc),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(title),
+        )
+        .highlight_style(Style::default().bg(Color::Rgb(40, 60, 80)).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▸ ");
+
+    let mut list_state = ListState::default();
+    // Clamp the highlight to the visible rows (regression: an off-by-one kept
+    // the highlight stuck on the first row while navigating).
+    let sel = palette.selected.min(rows.saturating_sub(1) as usize);
+    list_state.select(Some(sel));
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn render_header(f: &mut Frame, area: Rect, state: &ChatState) {
+    let title = Line::from(vec![
+        Span::styled(" ◆ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled("morse", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" v1.0 ", Style::default().fg(Color::DarkGray)),
+        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&state.model_label, Style::default().fg(Color::Magenta)),
+    ]);
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray));
+    f.render_widget(Paragraph::new(title).block(block), area);
+}
+
+fn render_transcript(f: &mut Frame, area: Rect, state: &mut ChatState) {
+    let mut lines: Vec<Line> = Vec::new();
+    for msg in &state.messages {
+        match msg.role {
+            Role::User => {
+                lines.push(Line::from(vec![
+                    Span::styled("❯ you ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                for l in render_markdown(&msg.content) {
+                    lines.push(l);
+                }
+                lines.push(Line::from(""));
+            }
+            Role::Assistant => {
+                lines.push(Line::from(vec![
+                    Span::styled("◆ morse ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                ]));
+                for l in render_markdown(&msg.content) {
+                    lines.push(l);
+                }
+                if let Some(meta) = &msg.meta {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ⏱ {}", meta),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            Role::System => {
+                for l in msg.content.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", l),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            Role::Error => {
+                lines.push(Line::from(Span::styled(
+                    format!("  ✖ {}", msg.content),
+                    Style::default().fg(Color::Red),
+                )));
+                lines.push(Line::from(""));
+            }
+        }
+    }
+
+    if state.pending {
+        lines.push(Line::from(Span::styled(
+            "  ◌ thinking…",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+        )));
+    }
+
+    // Scroll bounds in WRAPPED-row space (ratatui's scroll offset counts rows
+    // after wrapping). We estimate the wrapped row count ourselves so follow
+    // mode lands exactly on the bottom — no buffer, and short transcripts
+    // (fewer rows than the viewport) stay pinned at the top instead of being
+    // scrolled off-screen.
+    let view_h = area.height.max(1);
+    let inner_w = area.width.saturating_sub(2).max(1); // Paragraph fills `area` directly (no block)
+    let total_rows = estimate_wrapped_rows(&lines, inner_w) as u16;
+    let max_scroll = total_rows.saturating_sub(view_h);
+    state.max_scroll = max_scroll;
+    let eff = if state.follow {
+        max_scroll
+    } else {
+        state.scroll_offset.min(max_scroll)
+    };
+    state.scroll_offset = eff;
+
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((eff, 0));
+    f.render_widget(para, area);
+}
+
+/// Estimate how many terminal rows `lines` occupy when wrapped to `width`
+/// columns. Mirrors ratatui's word-wrap closely enough for scrolling: we
+/// count by display width (ANSI-aware), blank lines take one row, and each
+/// logical line takes at least one row.
+fn estimate_wrapped_rows(lines: &[Line], width: u16) -> usize {
+    let w = width.max(1) as usize;
+    lines
+        .iter()
+        .map(|line| {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let cols = console::measure_text_width(&text);
+            if cols == 0 {
+                1
+            } else {
+                cols.div_ceil(w).max(1)
+            }
+        })
+        .sum()
+}
+
+/// Minimal markdown rendering: bold, inline code, fenced code blocks.
+fn render_markdown(content: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut in_code = false;
+    for raw in content.lines() {
+        if raw.trim_start().starts_with("```") {
+            if !in_code {
+                // Show the language as a subtle label on the opening fence.
+                let lang = raw.trim_start().trim_start_matches('`').trim();
+                if !lang.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ── {} ──", lang),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    )));
+                }
+            }
+            in_code = !in_code;
+            continue;
+        }
+        // Markdown table rows: render with dim pipes.
+        if raw.trim_start().starts_with('|') && raw.trim_end().ends_with('|') {
+            if raw.contains("---") {
+                continue; // separator row: skip
+            }
+            let cells: Vec<&str> = raw.trim().trim_matches('|').split('|').collect();
+            let mut spans = vec![Span::styled("  ", Style::default())];
+            for (i, cell) in cells.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                }
+                spans.push(Span::styled(cell.trim().to_string(), Style::default().fg(Color::White)));
+            }
+            lines.push(Line::from(spans));
+            continue;
+        }
+        // Blockquote: italic with a left bar.
+        if let Some(q) = raw.trim_start().strip_prefix("> ") {
+            lines.push(Line::from(vec![
+                Span::styled("  ▎ ", Style::default().fg(Color::Magenta)),
+                Span::styled(q.to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::ITALIC)),
+            ]));
+            continue;
+        }
+        if in_code {
+            // Lightweight syntax highlighting for the common languages.
+            for span in highlight_code_line(raw) {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    span,
+                ]));
+            }
+            continue;
+        }
+        // Headings.
+        if let Some(rest) = raw.strip_prefix("### ") {
+            lines.push(md_bold(rest, Color::Magenta));
+            continue;
+        }
+        if let Some(rest) = raw.strip_prefix("## ") {
+            lines.push(md_bold(rest, Color::Magenta));
+            continue;
+        }
+        if let Some(rest) = raw.strip_prefix("# ") {
+            lines.push(md_bold(rest, Color::Magenta));
+            continue;
+        }        // Bullet points.
+        if let Some(rest) = raw.strip_prefix("- ").or_else(|| raw.strip_prefix("* ")) {
+            let mut spans = vec![Span::styled("  • ", Style::default().fg(Color::Cyan))];
+            spans.extend(md_inline(rest));
+            lines.push(Line::from(spans));
+            continue;
+        }
+        // Numbered list.
+        let bytes = raw.as_bytes();
+        if bytes.len() > 2
+            && bytes[0].is_ascii_digit()
+            && bytes[1].is_ascii_digit()
+            && &raw[2..3] == ". "
+        {
+            let mut spans = vec![Span::styled("    ", Style::default())];
+            spans.extend(md_inline(raw));
+            lines.push(Line::from(spans));
+            continue;
+        }
+        lines.push(Line::from(md_inline(raw)));
+    }
+    lines
+}
+
+/// One-language-agnostic tokenizer producing colored spans for a code line.
+/// Covers Rust/Go/Python/JS keywords, strings, comments, numbers, attributes.
+fn highlight_code_line(raw: &str) -> Vec<Span<'static>> {
+    const KEYWORDS: &[&str] = &[
+        "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "return", "if", "else",
+        "match", "for", "while", "loop", "use", "mod", "const", "static", "type", "where",
+        "func", "package", "import", "var", "go", "defer", "chan", "range",
+        "def", "class", "self", "lambda", "with", "as", "try", "except", "raise", "yield",
+        "async", "await", "export", "const", "function", "new", "this", "extends", "interface",
+        "true", "false", "null", "None", "Some", "Ok", "Err",
+    ];
+
+    let mut spans: Vec<Span> = Vec::new();
+    let comment_idx = raw.find("//").or_else(|| raw.find('#').filter(|i| {
+        // '#' starts a comment only in python-ish lines at word start.
+        let before = raw[..*i].trim_end();
+        before.is_empty() || before.ends_with([' ', '(', ','])
+    }));
+    let (code_part, comment_part) = match comment_idx {
+        Some(i) => (&raw[..i], Some(raw[i..].to_string())),
+        None => (raw, None),
+    };
+
+    // Tokenize code_part: strings, numbers, words, others.
+    let mut buf = String::new();
+    let mut chars = code_part.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' || c == '\'' {
+            // Flush pending plain text.
+            if !buf.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut buf), Style::default().fg(Color::White)));
+            }
+            let mut s = String::new();
+            s.push(c);
+            for c2 in chars.by_ref() {
+                s.push(c2);
+                if c2 == c {
+                    break;
+                }
+            }
+            spans.push(Span::styled(s, Style::default().fg(Color::Yellow)));
+        } else if c.is_ascii_digit() {
+            if !buf.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut buf), Style::default().fg(Color::White)));
+            }
+            let mut n = String::new();
+            n.push(c);
+            while let Some(&c2) = chars.peek() {
+                if c2.is_ascii_digit() || c2 == '.' || c2 == '_' {
+                    n.push(c2);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            spans.push(Span::styled(n, Style::default().fg(Color::Magenta)));
+        } else if c.is_alphabetic() || c == '_' {
+            buf.push(c);
+        } else {
+            // Identifier boundary: check keyword.
+            if !buf.is_empty() {
+                let word = std::mem::take(&mut buf);
+                if KEYWORDS.contains(&word.as_str()) {
+                    spans.push(Span::styled(word, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)));
+                } else {
+                    spans.push(Span::styled(word, Style::default().fg(Color::White)));
+                }
+            }
+            buf.push(c);
+            // Operators/punctuation in dim cyan.
+            let word = std::mem::take(&mut buf);
+            spans.push(Span::styled(word, Style::default().fg(Color::Cyan)));
+        }
+    }
+    if !buf.is_empty() {
+        let word = buf;
+        if KEYWORDS.contains(&word.as_str()) {
+            spans.push(Span::styled(word, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)));
+        } else {
+            spans.push(Span::styled(word, Style::default().fg(Color::White)));
+        }
+    }
+    if let Some(comment) = comment_part {
+        spans.push(Span::styled(comment, Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), Style::default()));
+    }
+    spans
+}
+
+fn md_bold(text: &str, color: Color) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {}", text),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Render `**bold**` and `` `code` `` inline, returning segments so callers
+/// can compose them into a line with a prefix.
+fn md_inline(text: &str) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut rest = text;
+    loop {
+        if rest.is_empty() {
+            break;
+        }
+        let bold = rest.find("**");
+        let code = rest.find('`');
+        match (bold, code) {
+            (Some(b), Some(c)) if c < b => {
+                spans.push(Span::styled(rest[..c].to_string(), Style::default()));
+                let after = &rest[c + 1..];
+                if let Some(close) = after.find('`') {
+                    spans.push(Span::styled(
+                        after[..close].to_string(),
+                        Style::default().fg(Color::Green).bg(Color::Rgb(20, 24, 28)),
+                    ));
+                    rest = &after[close + 1..];
+                } else {
+                    spans.push(Span::styled(after.to_string(), Style::default().fg(Color::Green)));
+                    break;
+                }
+            }
+            (Some(b), _) => {
+                spans.push(Span::styled(rest[..b].to_string(), Style::default()));
+                let after = &rest[b + 2..];
+                if let Some(close) = after.find("**") {
+                    spans.push(Span::styled(
+                        after[..close].to_string(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ));
+                    rest = &after[close + 2..];
+                } else {
+                    spans.push(Span::styled(after.to_string(), Style::default().add_modifier(Modifier::BOLD)));
+                    break;
+                }
+            }
+            (None, Some(c)) => {
+                spans.push(Span::styled(rest[..c].to_string(), Style::default()));
+                let after = &rest[c + 1..];
+                if let Some(close) = after.find('`') {
+                    spans.push(Span::styled(
+                        after[..close].to_string(),
+                        Style::default().fg(Color::Green).bg(Color::Rgb(20, 24, 28)),
+                    ));
+                    rest = &after[close + 1..];
+                } else {
+                    spans.push(Span::styled(after.to_string(), Style::default().fg(Color::Green)));
+                    break;
+                }
+            }
+            (None, None) => {
+                spans.push(Span::styled(rest.to_string(), Style::default()));
+                break;
+            }
+        }
+        let _ = bold;
+    }
+    spans
+}
+
+fn render_input(f: &mut Frame, area: Rect, state: &ChatState) {
+    let (title, border_color) = match state.input_mode {
+        InputMode::Editing => {
+            if state.history_idx.is_some() {
+                (" Send · ↑/↓ history ", Color::Green)
+            } else {
+                (" Send · ↑ recalls history ", Color::Cyan)
+            }
+        }
+        InputMode::Normal => (" Normal · i or / to type · q to quit ", Color::DarkGray),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(title);
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    let cursor_x = inner.x + state.input.chars().count() as u16;
+    let para = if state.input.is_empty() && state.input_mode == InputMode::Editing {
+        Paragraph::new(Span::styled(
+            "Type a message…  (/ for commands, @file for context)",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        Paragraph::new(state.input.as_str()).style(Style::default().fg(Color::White))
+    };
+    f.render_widget(para, inner);
+    if state.input_mode == InputMode::Editing {
+        f.set_cursor(
+            cursor_x.min(inner.x + inner.width.saturating_sub(1)),
+            inner.y,
+        );
+    }
+}
+
+fn render_status(f: &mut Frame, area: Rect, state: &ChatState) {
+    let (status, color) = if state.pending {
+        ("◌ thinking", Color::Yellow)
+    } else {
+        ("✓ ready", Color::DarkGray)
+    };
+    // While the user types a slash command, surface matching commands live.
+    let typing_hint = if !state.pending && state.input.starts_with('/') {
+        let matches: Vec<&str> = SLASH_INFO
+            .iter()
+            .map(|(c, _)| *c)
+            .filter(|c| c.starts_with(&state.input))
+            .take(4)
+            .collect();
+        if matches.is_empty() {
+            String::new()
+        } else {
+            format!("│ {} ", matches.join("  "))
+        }
+    } else {
+        String::new()
+    };
+    let pending_label = if state.pending && !state.pending_label.is_empty() {
+        format!(" · {}", state.pending_label)
+    } else {
+        String::new()
+    };
+    let msgs = state
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .count();
+
+    // Rough context budget: ~chars/4 across the transcript vs a 128k window.
+    let total_chars: usize = state.messages.iter().map(|m| m.content.len()).sum();
+    let est_tokens = (total_chars / 4) as u32;
+    const BUDGET: u32 = 128_000;
+    let pct = est_tokens.min(BUDGET) as f32 / BUDGET as f32;
+    const GAUGE: usize = 8;
+    let filled = (pct * GAUGE as f32).round() as usize;
+    let gauge = format!("{}{}", "█".repeat(filled), "░".repeat(GAUGE - filled));
+    let gauge_color = if pct > 0.85 {
+        Color::Red
+    } else if pct > 0.6 {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            format!(" {}{} ", status, pending_label),
+            Style::default().fg(color),
+        ),
+        Span::styled(
+            format!("│ {} msgs ", msgs),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(typing_hint, Style::default().fg(Color::Cyan)),
+        Span::styled("│ ".to_string(), Style::default().fg(Color::DarkGray)),
+        Span::styled(gauge, Style::default().fg(gauge_color)),
+        Span::styled(
+            format!(" ~{}k ctx ", est_tokens / 1000),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "│ /help · ↑ history · Ctrl+C quit",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
+
+// ---------------------------------------------------------------------------
+// Tutorial
+// ---------------------------------------------------------------------------
+
+pub fn tutorial() -> Result<()> {
+    let ui = UI::new(true);
+    ui.print(&ui.morse_ascii_art());
+    ui.print("");
+    ui.print(&ui.header(" Getting Started "));
+    ui.print("");
+    ui.print(&ui.section("1. Configure a provider"));
+    ui.print(&ui.bullet("export GROQ_API_KEY=…       free, fast (console.groq.com)", 0));
+    ui.print(&ui.bullet("export OPENAI_API_KEY=…     or OpenAI/Anthropic/Gemini", 0));
+    ui.print("");
+    ui.print(&ui.section("2. Chat interactively"));
+    ui.print(&ui.bullet("morse                        open the TUI", 0));
+    ui.print(&ui.bullet("morse \"what is a closure?\"   one-shot streaming answer", 0));
+    ui.print("");
+    ui.print(&ui.section("3. Let the agent do real work"));
+    ui.print(&ui.bullet("morse -a \"add error handling to src/main.rs\"", 0));
+    ui.print(&ui.bullet("morse agent \"write tests for the config module\"", 0));
+    ui.print(&ui.muted("  The agent reads, edits, and runs commands with your approval."));
+    ui.print("");
+    ui.print(&ui.section("4. Explore the codebase"));
+    ui.print(&ui.bullet("morse graph-build            build a code knowledge graph", 0));
+    ui.print(&ui.bullet("morse rag-search \"auth\"      semantic search over your code", 0));
+    ui.print(&ui.bullet("morse review                 AI code review", 0));
+    ui.print("");
+    ui.print(&ui.section("5. Multi-agent"));
+    ui.print(&ui.bullet("morse swarm \"implement feature X\"   parallel agents", 0));
+    ui.print(&ui.bullet("morse ralph \"refactor + verify\"      self-verifying loop", 0));
+    ui.print("");
+    ui.print(&ui.success("Run 'morse --help' for everything. Happy coding!"));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tab completion & context helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the trailing `@partial` token from the input, if the cursor is on
+/// one. Returns (start_index_of_token_including_at, partial_path).
+pub fn trailing_at_token(input: &str) -> Option<(usize, String)> {
+    // The token starts at the last '@' that is either input start or preceded
+    // by whitespace, and runs to the end (cursor is always at end in our TUI).
+    let bytes = input.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b'@' && (i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+            let token = &input[i + 1..];
+            // Path-ish characters only; otherwise it's not a completion token.
+            if token.chars().all(|c| {
+                c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-')
+            }) {
+                return Some((i, token.to_string()));
+            }
+            return None;
+        }
+        // Stop scanning at whitespace — the '@' must be the last word.
+        if bytes[i] == b' ' || bytes[i] == b'\t' {
+            return None;
+        }
+    }
+    None
+}
+
+/// Complete a trailing `@partial` against files under `root`.
+/// Returns the completed full token (path) plus other candidates for display.
+pub fn complete_at(input: &str, root: &std::path::Path, max_results: usize) -> Option<(String, Vec<String>)> {
+    let (at_idx, partial) = trailing_at_token(input)?;
+    let abs = if partial.starts_with('/') {
+        std::path::PathBuf::from(&partial)
+    } else {
+        root.join(&partial)
+    };
+
+    // Two modes: completing a directory prefix (list its entries) or a partial
+    // name (list siblings matching the file-name part).
+    let (dir, name_filter) = if partial.ends_with('/') || abs.is_dir() {
+        (abs.clone(), String::new())
+    } else {
+        let name = abs
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let parent = abs.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| root.to_path_buf());
+        (parent, name)
+    };
+
+    // Collect matching entries (dirs first get a trailing '/').
+    let mut matches: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') && !name_filter.starts_with('.') {
+                continue;
+            }
+            if !name_filter.is_empty() && !name.starts_with(&name_filter) {
+                continue;
+            }
+            let slash = if entry.path().is_dir() { "/" } else { "" };
+            matches.push(format!("{}{}", name, slash));
+            if matches.len() >= max_results {
+                break;
+            }
+        }
+    }
+    if matches.is_empty() {
+        return None;
+    }
+    matches.sort();
+
+    // Complete to the longest common prefix among matches.
+    let completed_name = common_prefix(&matches);
+    let base = if partial.ends_with('/') || abs.is_dir() {
+        partial.clone()
+    } else {
+        partial
+            .rsplit_once('/')
+            .map(|(d, _)| format!("{}/", d))
+            .unwrap_or_default()
+    };
+    let full = format!("{}{}", base, completed_name);
+    let _ = at_idx;
+    Some((full, matches))
+}
+
+/// Longest common prefix of a list of strings.
+fn common_prefix(items: &[String]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let mut prefix = items[0].clone();
+    for item in &items[1..] {
+        while !item.starts_with(&prefix) {
+            prefix.pop();
+            if prefix.is_empty() {
+                return prefix;
+            }
+        }
+    }
+    prefix
+}
+
+/// Build the final prompt: pending snippets + persistent context files + the
+/// user's text. Bounded so a large /add set can't blow the request.
+pub fn build_prompt_with_context(
+    prompt: &str,
+    context_files: &[String],
+    pending: &[String],
+    root: &std::path::Path,
+    max_file_chars: usize,
+) -> String {
+    let mut out = String::new();
+    for s in pending {
+        out.push_str(s);
+        out.push_str("\n\n");
+    }
+    for f in context_files {
+        let path = if f.starts_with('/') {
+            std::path::PathBuf::from(f)
+        } else {
+            root.join(f)
+        };
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let shown: String = content.chars().take(max_file_chars).collect();
+            out.push_str(&format!(
+                "--- {} (added to context) ---\n```\n{}\n```\n--- end {} ---\n\n",
+                f,
+                shown,
+                if content.chars().count() > max_file_chars { "(truncated)" } else { "" }
+            ));
+        }
+    }
+    out.push_str(prompt);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trailing_at_token_finds_last_word() {
+        assert_eq!(
+            trailing_at_token("look at @src/li"),
+            Some((8, "src/li".to_string()))
+        );
+        assert_eq!(trailing_at_token("no mention here"), None);
+        // '@' not at a word boundary is not a completion token.
+        assert_eq!(trailing_at_token("email me a@b"), None);
+        // Trailing slash (dir completion) works.
+        assert_eq!(trailing_at_token("@src/"), Some((0, "src/".to_string())));
+    }
+
+    #[test]
+    fn complete_at_lists_dir_entries() {
+        let dir = std::env::temp_dir().join(format!("tui-c-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/alpha.rs"), "a").unwrap();
+        std::fs::write(dir.join("src/beta.rs"), "b").unwrap();
+        std::fs::write(dir.join("readme.md"), "r").unwrap();
+
+        // Completing "@src/" lists its entries.
+        let (full, cands) = complete_at("@src/", &dir, 10).expect("completions");
+        assert!(full.starts_with("src/"), "full={}", full);
+        assert!(cands.contains(&"alpha.rs".to_string()), "{:?}", cands);
+        assert!(cands.contains(&"beta.rs".to_string()));
+
+        // Completing "@src/a" matches alpha.rs uniquely (name prefix).
+        let (full2, cands2) = complete_at("@src/a", &dir, 10).expect("completions");
+        assert_eq!(full2, "src/alpha.rs");
+        assert_eq!(cands2.len(), 1);
+
+        // No match -> None.
+        assert!(complete_at("@zzz", &dir, 10).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn common_prefix_basic() {
+        assert_eq!(common_prefix(&["abc".into(), "abd".into()]), "ab");
+        assert_eq!(common_prefix(&["x".into()]), "x");
+        assert_eq!(common_prefix(&[]), "");
+    }
+
+    #[test]
+    fn build_prompt_includes_context_and_pending() {
+        let dir = std::env::temp_dir().join(format!("tui-p-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.rs"), "fn ctx() {}").unwrap();
+
+        let out = build_prompt_with_context(
+            "what does this do?",
+            &["lib.rs".to_string()],
+            &["Output of `ls` (ok):\n```\nfile\n```".to_string()],
+            &dir,
+            1000,
+        );
+        assert!(out.starts_with("Output of `ls`"), "pending first: {}", &out[..40]);
+        assert!(out.contains("--- lib.rs (added to context) ---"));
+        assert!(out.contains("fn ctx()"));
+        assert!(out.ends_with("what does this do?"));
+
+        // No context -> prompt unchanged.
+        let plain = build_prompt_with_context("hi", &[], &[], &dir, 1000);
+        assert_eq!(plain, "hi");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn highlighter_colors_keywords_strings_comments() {
+        let spans = highlight_code_line("fn main() { // hello");
+        let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(joined, "fn main() { // hello", "lossless roundtrip");
+        // The keyword span is styled; the comment span is dim.
+        assert!(spans.iter().any(|s| s.content == "fn" && s.style.fg.is_some()));
+        assert!(spans
+            .iter()
+            .any(|s| s.content.contains("// hello")));
+        // Strings are captured whole.
+        let spans = highlight_code_line("let s = \"hi\";");
+        assert!(spans.iter().any(|s| s.content.contains("\"hi\"")));
+    }
+
+    #[test]
+    fn wrapped_rows_estimate() {
+        // Blank lines = 1 row.
+        let blank = vec![Line::from("")];
+        assert_eq!(estimate_wrapped_rows(&blank, 80), 1);
+        // Short line = 1 row.
+        let short = vec![Line::from("hello world")];
+        assert_eq!(estimate_wrapped_rows(&short, 80), 1);
+        // Long line wraps: 200 cols at width 80 -> 3 rows.
+        let long = vec![Line::from("x".repeat(200))];
+        assert_eq!(estimate_wrapped_rows(&long, 80), 3);
+        // ANSI-styled spans count display width, not bytes.
+        let styled = vec![Line::from(Span::styled(
+            "hi".to_string(),
+            Style::default().fg(Color::Red),
+        ))];
+        assert_eq!(estimate_wrapped_rows(&styled, 80), 1);
+    }
+
+    #[test]
+    fn short_transcript_is_not_scrolled_offscreen() {
+        // Regression: follow-mode used to add a +16 buffer, scrolling short
+        // transcripts (welcome screen) completely out of view.
+        let view_h: u16 = 30;
+        let lines_len: u16 = 2; // welcome + separator
+        let max_scroll = lines_len.saturating_sub(view_h);
+        assert_eq!(max_scroll, 0, "content shorter than viewport must not scroll");
+        // follow -> eff = max_scroll = 0 -> top of content visible.
+    }
+
+    fn state() -> ChatState {
+        ChatState::new("test/model".into())
+    }
+
+    #[test]
+    fn history_prev_walks_back_then_stops() {
+        let mut s = state();
+        s.record_history("one");
+        s.record_history("two");
+        s.record_history("three");
+
+        s.history_prev(); // -> three
+        assert_eq!(s.input, "three");
+        s.history_prev(); // -> two
+        assert_eq!(s.input, "two");
+        s.history_prev(); // -> one (oldest)
+        assert_eq!(s.input, "one");
+        s.history_prev(); // stays at oldest
+        assert_eq!(s.input, "one");
+    }
+
+    #[test]
+    fn history_next_returns_to_draft() {
+        let mut s = state();
+        s.input = "draft".into();
+        s.record_history("first");
+        s.input = "partial".into(); // current draft being typed
+
+        s.history_prev(); // -> "first"
+        assert_eq!(s.input, "first");
+        s.history_next(); // past newest -> back to draft
+        assert_eq!(s.input, "partial");
+        s.history_next(); // no effect at end
+        assert_eq!(s.input, "partial");
+    }
+
+    #[test]
+    fn record_dedups_consecutive() {
+        let mut s = state();
+        s.record_history("same");
+        s.record_history("same");
+        assert_eq!(s.history.len(), 1, "consecutive duplicates collapsed");
+        s.record_history("other");
+        assert_eq!(s.history.len(), 2);
+    }
+
+    #[test]
+    fn history_noop_when_empty() {
+        let mut s = state();
+        s.input = "x".into();
+        s.history_prev();
+        assert_eq!(s.input, "x");
+        s.history_next();
+        assert_eq!(s.input, "x");
+    }
+}
