@@ -23,6 +23,7 @@ pub mod secrets;
 pub mod serve;
 pub mod session;
 pub mod skills;
+pub mod slash_commands;
 pub mod trust;
 pub mod tools;
 pub mod ratelimit;
