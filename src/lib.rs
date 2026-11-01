@@ -34,5 +34,6 @@ pub mod provenance;
 pub mod cloud;
 pub mod ratelimit;
 pub mod model_resolver;
+pub mod native_mac;
 pub mod rollback;
 pub mod ui;
