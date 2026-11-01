@@ -18,6 +18,7 @@ pub mod permissions;
 pub mod providers;
 pub mod rag;
 pub mod secrets;
+pub mod serve;
 pub mod session;
 pub mod trust;
 pub mod tools;
