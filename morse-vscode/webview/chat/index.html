@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morse Chat</title>
+    <!-- Content Security Policy to allow CDN scripts for Prism and DOMPurify -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src ${cspSource} https:;">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <header class="chat-header">
+            <div class="header-title">
+                <span class="logo">⚡</span>
+                <h1>Morse Chat</h1>
+                <span id="connection-status" class="status-indicator" title="Connecting...">
+                    <span class="status-dot"></span>
+                </span>
+            </div>
+            <div class="header-actions">
+                <button id="export-btn" class="icon-btn" title="Export Chat">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path
+                            d="M8 1a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L7.5 13.293V1.5A.5.5 0 0 1 8 1z" />
+                    </svg>
+                </button>
+                <button id="clear-btn" class="icon-btn" title="Clear Chat">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path
+                            d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z" />
+                        <path fill-rule="evenodd"
+                            d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z" />
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <div id="messages" class="messages-container">
+            <div class="welcome-message">
+                <div class="welcome-icon">⚡</div>
+                <h2>Welcome to Morse Chat</h2>
+                <p>I'm your AI coding assistant. I can help you with:</p>
+                <ul>
+                    <li>💻 Writing and editing code</li>
+                    <li>📚 Explaining complex functions</li>
+                    <li>🧪 Generating tests</li>
+                    <li>🔍 Debugging issues</li>
+                    <li>📝 Writing documentation</li>
+                </ul>
+                <p class="tip">Tip: Select code in the editor and use context menu commands!</p>
+            </div>
+        </div>
+
+        <div id="typing-indicator" class="typing-indicator hidden">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+
+        <div id="attachments" class="attachments-container"></div>
+
+        <div id="hunks-container" class="hunks-container hidden">
+            <div class="hunks-header">
+                <span class="hunks-title">📝 Pending Changes</span>
+                <div class="hunks-actions">
+                    <button id="accept-all-btn" class="btn btn-primary btn-sm">Accept All</button>
+                    <button id="reject-all-btn" class="btn btn-secondary btn-sm">Reject All</button>
+                </div>
+            </div>
+            <div id="hunks-list" class="hunks-list"></div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea id="message-input" placeholder="Ask me anything about your code... (Shift+Enter for new line)"
+                    rows="1"></textarea>
+                <div class="input-actions">
+                    <button id="attach-btn" class="icon-btn" title="Attach File">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path
+                                d="M4.5 3a2.5 2.5 0 0 1 5 0v9a1.5 1.5 0 0 1-3 0V5a.5.5 0 0 1 1 0v7a.5.5 0 0 0 1 0V3a1.5 1.5 0 1 0-3 0v9a2.5 2.5 0 0 0 5 0V5a.5.5 0 0 1 1 0v7a3.5 3.5 0 1 1-7 0V3z" />
+                        </svg>
+                    </button>
+                    <button id="send-btn" class="send-btn" title="Send Message">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path
+                                d="M15.854.146a.5.5 0 0 1 .11.54l-5.819 14.547a.75.75 0 0 1-1.329.124l-3.178-4.995L.643 7.184a.75.75 0 0 1 .124-1.33L15.314.037a.5.5 0 0 1 .54.11z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="input-hints">
+                <span>Enter to send</span>
+                <span>Shift+Enter for new line</span>
+                <span>Cmd+K clear</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <script src="chat.js"></script>
+</body>
+
+</html>

@@ -11,7 +11,6 @@
 /scripts/
 /reference/
 /third_party/
-/morse-vscode/
 /morse-web/
 /cmd/
 *.bak

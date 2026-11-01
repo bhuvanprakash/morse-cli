@@ -1,0 +1,264 @@
+{
+    "name": "morse-vscode",
+    "displayName": "Morse — AI Coding Agent",
+    "description": "AI-powered coding agent with HRCA architecture. Fix bugs, implement features, generate tests — all from VS Code.",
+    "version": "1.0.0",
+    "publisher": "morse-cli",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "AI",
+        "Programming Languages",
+        "Other"
+    ],
+    "keywords": [
+        "ai",
+        "coding",
+        "agent",
+        "refactor",
+        "fix"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "morse.fix",
+                "title": "Morse: Fix",
+                "category": "Morse",
+                "icon": "$(lightbulb)"
+            },
+            {
+                "command": "morse.edit",
+                "title": "Morse: Edit",
+                "category": "Morse",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "morse.chat",
+                "title": "Morse: Open Chat",
+                "category": "Morse",
+                "icon": "$(comment)"
+            },
+            {
+                "command": "morse.explain",
+                "title": "Morse: Explain Selection",
+                "category": "Morse",
+                "icon": "$(info)"
+            },
+            {
+                "command": "morse.generateTests",
+                "title": "Morse: Generate Tests",
+                "category": "Morse",
+                "icon": "$(beaker)"
+            },
+            {
+                "command": "morse.generateCommit",
+                "title": "Morse: Generate Commit Message",
+                "category": "Morse",
+                "icon": "$(git-commit)"
+            },
+            {
+                "command": "morse.auth",
+                "title": "Morse: Sign In",
+                "category": "Morse",
+                "icon": "$(account)"
+            },
+            {
+                "command": "morse.openDashboard",
+                "title": "Morse: Open Dashboard",
+                "category": "Morse",
+                "icon": "$(dashboard)"
+            },
+            {
+                "command": "morse.clearChat",
+                "title": "Morse: Clear Chat History",
+                "category": "Morse",
+                "icon": "$(clear-all)"
+            },
+            {
+                "command": "morse.exportChat",
+                "title": "Morse: Export Chat",
+                "category": "Morse",
+                "icon": "$(export)"
+            },
+            {
+                "command": "morse.acceptHunk",
+                "title": "Morse: Accept Hunk",
+                "category": "Morse"
+            },
+            {
+                "command": "morse.rejectHunk",
+                "title": "Morse: Reject Hunk",
+                "category": "Morse"
+            },
+            {
+                "command": "morse.acceptAllHunks",
+                "title": "Morse: Accept All Changes",
+                "category": "Morse"
+            }
+        ],
+        "menus": {
+            "editor/context": [
+                {
+                    "command": "morse.fix",
+                    "when": "editorHasSelection",
+                    "group": "morse@1"
+                },
+                {
+                    "command": "morse.explain",
+                    "when": "editorHasSelection",
+                    "group": "morse@2"
+                },
+                {
+                    "command": "morse.generateTests",
+                    "when": "editorHasSelection",
+                    "group": "morse@3"
+                },
+                {
+                    "command": "morse.edit",
+                    "when": "editorHasSelection",
+                    "group": "morse@4"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "morse.chat",
+                    "group": "navigation@99",
+                    "when": "editorIsOpen"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "morse.acceptHunk",
+                    "when": "false"
+                },
+                {
+                    "command": "morse.rejectHunk",
+                    "when": "false"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "command": "morse.fix",
+                "key": "ctrl+shift+f",
+                "mac": "cmd+shift+f",
+                "when": "editorFocus"
+            },
+            {
+                "command": "morse.chat",
+                "key": "ctrl+shift+m",
+                "mac": "cmd+shift+m"
+            },
+            {
+                "command": "morse.acceptHunk",
+                "key": "ctrl+shift+y",
+                "mac": "cmd+shift+y",
+                "when": "morse.hasPendingHunks"
+            },
+            {
+                "command": "morse.rejectHunk",
+                "key": "ctrl+shift+n",
+                "mac": "cmd+shift+n",
+                "when": "morse.hasPendingHunks"
+            }
+        ],
+        "configuration": {
+            "title": "Morse",
+            "properties": {
+                "morse.apiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "API key for Morse CLI",
+                    "scope": "application"
+                },
+                "morse.endpoint": {
+                    "type": "string",
+                    "default": "http://localhost:8080",
+                    "description": "Morse CLI server endpoint"
+                },
+                "morse.model": {
+                    "type": "string",
+                    "default": "claude-3-5-sonnet-20241022",
+                    "enum": [
+                        "claude-3-5-sonnet-20241022",
+                        "claude-3-opus-20240229",
+                        "gpt-4o",
+                        "gpt-4-turbo"
+                    ],
+                    "description": "AI model to use"
+                },
+                "morse.autoApprove": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically approve low-risk operations"
+                },
+                "morse.enableStreaming": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable streaming responses in chat"
+                },
+                "morse.maxContextLines": {
+                    "type": "number",
+                    "default": 50,
+                    "description": "Maximum lines of context to include"
+                },
+                "morse.sessionPersistence": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Persist chat sessions between VS Code sessions"
+                }
+            }
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "morse",
+                    "title": "Morse",
+                    "icon": "$(comment-discussion)"
+                }
+            ]
+        },
+        "views": {
+            "morse": [
+                {
+                    "id": "morse.history",
+                    "name": "History",
+                    "when": "morse.isAuthenticated"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src --ext ts",
+        "test": "node ./out/test/runTest.js",
+        "package": "vsce package",
+        "publish": "vsce publish"
+    },
+    "devDependencies": {
+        "@types/mocha": "^10.0.6",
+        "@types/node": "20.x",
+        "@types/vscode": "^1.85.0",
+        "@typescript-eslint/eslint-plugin": "^6.15.0",
+        "@typescript-eslint/parser": "^6.15.0",
+        "@vscode/test-electron": "^2.3.8",
+        "@vscode/vsce": "^2.22.0",
+        "eslint": "^8.56.0",
+        "mocha": "^10.2.0",
+        "typescript": "^5.3.3"
+    },
+    "dependencies": {
+        "diff-match-patch": "^1.0.5",
+        "prismjs": "^1.29.0",
+        "marked": "^11.1.0",
+        "dompurify": "^3.0.6"
+    }
+}

@@ -1,8 +1,16 @@
-# Morse CLI
+<div align="center">
 
-Terminal-first AI coding assistant. Ask a question, open a chat, or hand a task to an agent that can read, edit, and run commands in your project.
+# Morse
 
-Morse talks to many model providers, keeps a local knowledge graph and search index, and can limit what the agent is allowed to touch.
+**A terminal-first AI coding assistant, with a VS Code companion.**
+
+Ask a question, open a chat, or hand a task to an agent that can read, edit, and run commands in the project. Morse talks to many model providers, keeps a local knowledge graph, and can limit what the agent is allowed to touch.
+
+[Install](#install) · [Quick start](#quick-start) · [Providers](#providers) · [Commands](#everyday-commands) · [VS Code](#vs-code)
+
+</div>
+
+---
 
 ## Install
 
@@ -164,17 +172,32 @@ Trust checks decide what the agent may read or write. The graph is symbol-level.
 | `-v, --verbose` | More logging |
 | `--no-color` | Disable color |
 
+## VS Code
+
+The editor extension lives in [`morse-vscode`](morse-vscode). It adds chat, explain, fix, edit, test generation, and commit-message commands inside VS Code 1.85 or newer.
+
+```bash
+cd morse-vscode
+npm install
+npm run compile
+```
+
+Then use **Extensions: Install from Location...** in VS Code and pick that folder. Open the chat with `Cmd+Shift+M` on macOS, or `Ctrl+Shift+M` elsewhere. Fix a selection with `Cmd+Shift+F` / `Ctrl+Shift+F`.
+
+The extension expects the `morse` binary on your `PATH`.
+
 ## Layout
 
 ```
-src/main.rs     command-line entry
-src/lib.rs      library modules
-src/agent/      tool-using agent loop
-src/providers/  model providers
-src/tui/        interactive chat
-src/graph/      code knowledge graph
-src/rag/        semantic search
-src/trust/      path trust boundaries
+src/main.rs       command-line entry
+src/lib.rs        library modules
+src/agent/        tool-using agent loop
+src/providers/    model providers
+src/tui/          interactive chat
+src/graph/        code knowledge graph
+src/rag/          semantic search
+src/trust/        path trust boundaries
+morse-vscode/     VS Code extension
 ```
 
-Build artifacts, local `.morse` data, and editor caches stay out of git.
+Rust build output, local `.morse` data, and editor caches stay out of git.
