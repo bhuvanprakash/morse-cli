@@ -7,6 +7,7 @@ pub mod backup;
 pub mod checkpoint;
 pub mod config;
 pub mod cost;
+pub mod daemon;
 pub mod db;
 pub mod errors;
 pub mod graph;
